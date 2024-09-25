@@ -62,7 +62,11 @@ struct WorkflowRun {
 
 #[derive(Deserialize)]
 pub struct GetArtifactUrlResp {
-    pub archive_download_url: String, // https://api.github.com/repos/sjud/glass-slippers/actions/artifacts/1978642466/zip
+    pub artifacts: Vec<ArtifactDownloadUrl>, // https://api.github.com/repos/sjud/glass-slippers/actions/artifacts/1978642466/zip
+}
+#[derive(Deserialize, Clone)]
+pub struct ArtifactDownloadUrl {
+    pub archive_download_url: String,
 }
 #[derive(Debug, Deserialize)]
 pub struct Repository {}
@@ -90,6 +94,10 @@ async fn check_webhook(
 
         println!("{resp}");
         let url = serde_json::from_str::<GetArtifactUrlResp>(&resp)
+            .unwrap()
+            .artifacts
+            .first()
+            .cloned()
             .unwrap()
             .archive_download_url;
 
