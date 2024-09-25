@@ -1,12 +1,6 @@
 use std::sync::Arc;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    routing::post,
-    Router,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Router};
 use serde::Deserialize;
 
 use crate::github_event::GithubEvent;
@@ -78,6 +72,7 @@ async fn check_webhook(
 
         let response = client
             .get(url.as_ref())
+            .header(reqwest::header::USER_AGENT, "Glass-Slippers")
             .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token))
             .header(reqwest::header::ACCEPT, "application/vnd.github+json")
             .send()
