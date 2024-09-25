@@ -88,7 +88,7 @@ async fn check_webhook(
             .await
             .unwrap();
 
-        panic!("{resp}");
+        println!("{resp}");
         let url = serde_json::from_str::<GetArtifactUrlResp>(&resp)
             .unwrap()
             .archive_download_url;
