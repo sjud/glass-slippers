@@ -1,0 +1,74 @@
+name: Build Dev Example
+
+on:
+  push:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Use binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-leptos
+        run: |
+          cargo binstall cargo-leptos -y
+          rustup target add wasm32-unknown-unknown  
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: examples/dev-example/end2end/package-lock.json
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install npm dependencies and playwright
+        working-directory: examples/dev-example/end2end
+        run: |
+          npm ci
+          npx playwright install --with-deps
+      
+      - name: Rust cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Build example
+        working-directory: examples/dev-example
+        run: cargo leptos build --release
+      
+      - name: Run server in background
+        working-directory: target/release
+        run: ./dev-example &
+
+      - name: Run playwright tests
+        working-directory: examples/dev-example/end2end
+        run: npx playwright test
+
+      - name: Upload Server Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-example
+          path: examples/dev-example/target/release/dev-example
+      
