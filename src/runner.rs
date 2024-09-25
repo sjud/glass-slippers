@@ -79,7 +79,7 @@ async fn check_webhook(
     if let Some(artifacts_url) = e.valid() {
         println!("{}", artifacts_url);
         let client = reqwest::Client::new();
-        let token = config.github_token;
+        let token = config.github_api_key;
         let resp = client
             .get(artifacts_url)
             .header(reqwest::header::USER_AGENT, "Glass-Slippers")
