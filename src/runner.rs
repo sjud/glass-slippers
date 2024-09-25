@@ -16,36 +16,32 @@ pub struct RunnerConfig {
 
 #[derive(Deserialize, Debug)]
 struct GithubWebhookPayload {
-    action: String,
-    pull_request: Option<PullRequest>,
+    action: String, // i.e "completed"
     workflow_run: Option<WorkflowRun>,
 }
-
-#[derive(Deserialize, Debug)]
-struct PullRequest {
-    base: BranchInfo,
+impl GithubWebhookPayload {
+    pub fn valid(self) -> bool {
+        if let Some(workflow) = self.workflow_run {
+            self.action == String::from("completed")
+                && workflow.status == String::from("completed")
+                && workflow.conclusion == Some(String::from("success"))
+                && workflow.head_branch == String::from("main")
+        } else {
+            false
+        }
+    }
 }
-
-#[derive(Deserialize, Debug)]
-struct BranchInfo {
-    #[serde(rename = "ref")]
-    ref_name: String,
-}
-
 #[derive(Deserialize, Debug)]
 struct WorkflowRun {
-    status: String,
-    conclusion: Option<String>,
-    head_branch: String,
+    status: String,             // i.e "completed"
+    conclusion: Option<String>, // "success"
+    head_branch: String,        // "main"
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Repository {}
-async fn check_webhook(
-    // GithubEvent(e): GithubEvent<GithubWebhookPayload>
-    body: String,
-) -> impl IntoResponse {
-    println!("{}", body);
+async fn check_webhook(GithubEvent(e): GithubEvent<GithubWebhookPayload>) -> impl IntoResponse {
+    println!("{}", e.valid());
     ()
 }
 
