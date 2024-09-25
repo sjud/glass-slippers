@@ -9,7 +9,6 @@ use crate::github_event::GithubEvent;
 pub struct RunnerConfigDeserialize {
     /// this is used to confirm the webhook signature
     pub github_token: String,
-    pub artifact_url: String,
     /// this is used to download the artifact
     pub github_api_key: String,
 }
@@ -18,7 +17,6 @@ impl From<RunnerConfigDeserialize> for RunnerConfig {
     fn from(other: RunnerConfigDeserialize) -> RunnerConfig {
         RunnerConfig {
             github_token: Arc::new(other.github_token),
-            artifact_url: Arc::new(other.artifact_url),
             github_api_key: Arc::new(other.github_api_key),
         }
     }
@@ -28,7 +26,6 @@ impl From<RunnerConfigDeserialize> for RunnerConfig {
 pub struct RunnerConfig {
     /// this is used to confirm the webhook signature
     pub github_token: Arc<String>,
-    pub artifact_url: Arc<String>,
     /// this is used to download the artifact
     pub github_api_key: Arc<String>,
 }
@@ -39,14 +36,19 @@ struct GithubWebhookPayload {
     workflow_run: Option<WorkflowRun>,
 }
 impl GithubWebhookPayload {
-    pub fn valid(self) -> bool {
+    pub fn valid(self) -> Option<String> {
         if let Some(workflow) = self.workflow_run {
-            self.action == String::from("completed")
+            if self.action == String::from("completed")
                 && workflow.status == String::from("completed")
                 && workflow.conclusion == Some(String::from("success"))
                 && workflow.head_branch == String::from("main")
+            {
+                Some(workflow.artifacts_url)
+            } else {
+                None
+            }
         } else {
-            false
+            None
         }
     }
 }
@@ -55,8 +57,13 @@ struct WorkflowRun {
     status: String,             // i.e "completed"
     conclusion: Option<String>, // "success"
     head_branch: String,        // "main"
+    artifacts_url: String, // "https://api.github.com/repos/sjud/glass-slippers/actions/runs/11039278965/artifacts",
 }
 
+#[derive(Deserialize)]
+pub struct GetArtifactUrlResp {
+    pub archive_download_url: String, // https://api.github.com/repos/sjud/glass-slippers/actions/artifacts/1978642466/zip
+}
 #[derive(Debug, Deserialize)]
 pub struct Repository {}
 
@@ -65,13 +72,25 @@ async fn check_webhook(
     State(config): State<RunnerConfig>,
     GithubEvent(e): GithubEvent<GithubWebhookPayload>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    if e.valid() {
+    if let Some(artifacts_url) = e.valid() {
         let client = reqwest::Client::new();
-        let url = config.artifact_url;
         let token = config.github_token;
 
+        let url = client
+            .get(artifacts_url)
+            .header(reqwest::header::USER_AGENT, "Glass-Slippers")
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token))
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .send()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .json::<GetArtifactUrlResp>()
+            .await
+            .unwrap()
+            .archive_download_url;
+
         let response = client
-            .get(url.as_ref())
+            .get(url)
             .header(reqwest::header::USER_AGENT, "Glass-Slippers")
             .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token))
             .header(reqwest::header::ACCEPT, "application/vnd.github+json")
