@@ -1,3 +1,4 @@
 /target
 /examples/*/target
 Config.toml
+artifact.zip

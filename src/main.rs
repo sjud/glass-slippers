@@ -1,4 +1,4 @@
-use runner::RunnerConfig;
+use runner::{RunnerConfig, RunnerConfigDeserialize};
 
 /*
  the vps runner runs on the server that runs the webserver
@@ -53,8 +53,9 @@ async fn main() {
         std::fs::read_to_string("Config.toml").expect("Config file in crate root.");
 
     // Deserialize the String into your RunnerConfig struct
-    let config: RunnerConfig =
+    let config: RunnerConfigDeserialize =
         toml::from_str(&config_contents).expect("Config.toml to be valid toml");
+    let config = RunnerConfig::from(config);
 
     runner::runner(config).await;
 }
