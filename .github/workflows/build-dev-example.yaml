@@ -59,7 +59,7 @@ jobs:
         run: cargo leptos build --release
       
       - name: Run server in background
-        working-directory: target/release
+        working-directory: examples/dev-example/target/release
         run: ./dev-example &
 
       - name: Run playwright tests
