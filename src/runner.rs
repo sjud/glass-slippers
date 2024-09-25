@@ -79,7 +79,7 @@ async fn check_webhook(
         let resp = client
             .get(artifacts_url)
             .header(reqwest::header::USER_AGENT, "Glass-Slippers")
-            .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token))
+            //.header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token))
             .header(reqwest::header::ACCEPT, "application/vnd.github+json")
             .send()
             .await
