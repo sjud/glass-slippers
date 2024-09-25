@@ -73,10 +73,10 @@ async fn check_webhook(
     GithubEvent(e): GithubEvent<GithubWebhookPayload>,
 ) -> Result<impl IntoResponse, StatusCode> {
     if let Some(artifacts_url) = e.valid() {
+        println!("{}", artifacts_url);
         let client = reqwest::Client::new();
         let token = config.github_token;
-
-        let url = client
+        let resp = client
             .get(artifacts_url)
             .header(reqwest::header::USER_AGENT, "Glass-Slippers")
             .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token))
@@ -84,8 +84,12 @@ async fn check_webhook(
             .send()
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .json::<GetArtifactUrlResp>()
+            .text()
             .await
+            .unwrap();
+
+        panic!("{resp}");
+        let url = serde_json::from_str::<GetArtifactUrlResp>(&resp)
             .unwrap()
             .archive_download_url;
 
