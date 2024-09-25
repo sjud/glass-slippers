@@ -1,3 +1,5 @@
+use runner::RunnerConfig;
+
 /*
  the vps runner runs on the server that runs the webserver
  when the github workflow completes for the project the workflow will create an artifact
@@ -44,8 +46,17 @@ pingora reverse proxy (we're planning on running our server behind cloudflared a
 pub mod github_event;
 pub mod runner;
 
-fn main() {
-    println!("Hello, world!");
+#[tokio::main]
+async fn main() {
+    // Read the contents of the file into a String
+    let config_contents =
+        std::fs::read_to_string("Config.toml").expect("Config file in crate root.");
+
+    // Deserialize the String into your RunnerConfig struct
+    let config: RunnerConfig =
+        toml::from_str(&config_contents).expect("Config.toml to be valid toml");
+
+    runner::runner(config).await;
 }
 
 /*
