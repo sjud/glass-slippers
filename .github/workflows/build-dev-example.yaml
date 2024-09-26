@@ -76,5 +76,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dev-example-site
-          path: examples/dev-example/target/site
+          path: examples/dev-example/target/site/
       

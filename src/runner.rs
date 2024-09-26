@@ -74,7 +74,7 @@ pub struct Artifact {
 pub struct Repository {}
 
 #[axum::debug_handler]
-async fn check_webhook(
+async fn handle_new_artifacts_webhook(
     State(config): State<RunnerConfig>,
     GithubEvent(e): GithubEvent<GithubWebhookPayload>,
 ) -> Result<impl IntoResponse, StatusCode> {
@@ -108,12 +108,13 @@ async fn check_webhook(
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             let zip_file = format!("zips/{}.zip", artifact.name);
+            // open in write only
             let mut file = std::fs::File::create(&zip_file).unwrap();
 
             let content = response.bytes().await.unwrap();
 
             std::io::copy(&mut content.as_ref(), &mut file).unwrap();
-
+            // open in read
             let mut file = std::fs::File::options()
                 .read(true)
                 .write(true)
@@ -135,7 +136,7 @@ async fn check_webhook(
 /// If so it fetches the artifact, as described in the Config.toml and starts the artifact (presuming its a server) in green/blue deployment style.
 pub async fn runner(config: RunnerConfig) {
     let router: Router<()> = Router::new()
-        .route("/github", post(check_webhook))
+        .route("/github", post(handle_new_artifacts_webhook))
         .with_state(config);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
