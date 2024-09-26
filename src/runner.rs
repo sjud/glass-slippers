@@ -115,7 +115,7 @@ async fn check_webhook(
             std::io::copy(&mut content.as_ref(), &mut file).unwrap();
 
             let mut zip = zip::ZipArchive::new(&mut file).unwrap();
-            zip.extract("/unzipped").unwrap();
+            zip.extract("unzipped").unwrap();
         }
 
         println!("Artifact downloaded successfully!");
