@@ -72,11 +72,11 @@ jobs:
           mkdir -p app/target/site
           cp target/release/dev-example app/dev_example
           cp -r target/site app/target/site
-          tar -cvf app.tar app -C app .
+          tar -cvf app.tar -C app .
 
       - name: Upload App Bundle
         uses: actions/upload-artifact@v4
         with:
-          name: dev-example
+          name: app-tar
           path: examples/dev-example/app.tar
 
