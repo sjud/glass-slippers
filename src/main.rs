@@ -17,7 +17,7 @@ use runner::{RunnerConfig, RunnerConfigDeserialize};
  security around artifacts/webhooks (use a secure key, validate artifacts before deployment)
  handling failure (if the new instance fails, how do you roll back or keep the old running?) use health check after deployment before switching over (and before database migration)
  graceful shutdown/ connection draining (allow old server to finish processing requests before shutdown)
-
+ ..
 ideas:
 
 pingora reverse proxy (we're planning on running our server behind cloudflared anyways so our reverse proxy here can mostly be for deployment but it can also automatically validate users based on their tokens
