@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use zip::read::ZipArchive;
 
-fn unzip_file(zip_file: &str, destination: &str) -> io::Result<()> {
+pub fn unzip_file(zip_file: &str, destination: &str) -> io::Result<()> {
     let file = File::open(zip_file)?;
     let mut archive = ZipArchive::new(file)?;
 

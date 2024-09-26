@@ -62,11 +62,12 @@ struct WorkflowRun {
 
 #[derive(Deserialize)]
 pub struct GetArtifactUrlResp {
-    pub artifacts: Vec<ArtifactDownloadUrl>, // https://api.github.com/repos/sjud/glass-slippers/actions/artifacts/1978642466/zip
+    pub artifacts: Vec<Artifact>, // https://api.github.com/repos/sjud/glass-slippers/actions/artifacts/1978642466/zip
 }
 #[derive(Deserialize, Clone)]
-pub struct ArtifactDownloadUrl {
+pub struct Artifact {
     pub archive_download_url: String,
+    pub name: String,
 }
 #[derive(Debug, Deserialize)]
 pub struct Repository {}
@@ -93,32 +94,29 @@ async fn check_webhook(
             .unwrap();
 
         println!("{resp}");
-        let url = serde_json::from_str::<GetArtifactUrlResp>(&resp)
+        let artifacts = serde_json::from_str::<GetArtifactUrlResp>(&resp)
             .unwrap()
-            .artifacts
-            .first()
-            .cloned()
-            .unwrap()
-            .archive_download_url;
+            .artifacts;
+        for artifact in artifacts {
+            let response = client
+                .get(artifact.archive_download_url)
+                .header(reqwest::header::USER_AGENT, "Glass-Slippers")
+                .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token))
+                .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+                .send()
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let zip_file = format!("{}.zip", artifact.name);
+            let unzipped_file = artifact.name;
+            let mut file =
+                std::fs::File::create(&zip_file).map_err(|_| StatusCode::INSUFFICIENT_STORAGE)?;
 
-        let response = client
-            .get(url)
-            .header(reqwest::header::USER_AGENT, "Glass-Slippers")
-            .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token))
-            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-            .send()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let content = response.bytes().await.unwrap();
 
-        let mut file =
-            std::fs::File::create("artifact.zip").map_err(|_| StatusCode::INSUFFICIENT_STORAGE)?;
+            std::io::copy(&mut content.as_ref(), &mut file).unwrap();
 
-        let content = response
-            .bytes()
-            .await
-            .map_err(|_| StatusCode::IM_A_TEAPOT)?;
-
-        std::io::copy(&mut content.as_ref(), &mut file).unwrap();
+            crate::unzip::unzip_file(&zip_file, &unzipped_file).unwrap();
+        }
 
         println!("Artifact downloaded successfully!");
     }

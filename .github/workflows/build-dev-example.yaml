@@ -72,3 +72,9 @@ jobs:
           name: dev-example
           path: examples/dev-example/target/release/dev-example
       
+      - name: Upload Server Site
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-example-site
+          path: examples/dev-example/target/site
+      
