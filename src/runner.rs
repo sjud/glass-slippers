@@ -96,7 +96,7 @@ async fn check_webhook(
         println!("{resp}");
         let artifacts = serde_json::from_str::<GetArtifactUrlResp>(&resp)
             .unwrap()
-            .artifacts;
+            .artifacts; //
         for artifact in artifacts {
             let response = client
                 .get(artifact.archive_download_url)
