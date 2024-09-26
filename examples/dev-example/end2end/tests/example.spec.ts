@@ -5,5 +5,5 @@ test("homepage has title and heading text", async ({ page }) => {
 
   await expect(page).toHaveTitle("Welcome to Leptos");
 
-  await expect(page.locator("h1")).toHaveText("Welcome to Blue Leptos!");
+  await expect(page.locator("h1")).toHaveText("Welcome to Leptos!");
 });
