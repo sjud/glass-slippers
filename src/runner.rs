@@ -5,8 +5,8 @@ use nix::{
     unistd::Pid,
 };
 use serde::Deserialize;
-use std::sync::Arc;
-use tempfile::{tempfile, NamedTempFile};
+use std::{fs::read_dir, sync::Arc};
+use tempfile::{tempfile, NamedTempFile, TempDir};
 use tokio::{
     process::{Child, Command},
     spawn,
@@ -144,9 +144,11 @@ async fn handle_new_artifacts_webhook(
             std::io::copy(&mut content.as_ref(), &mut file).unwrap();
 
             let mut zip = zip::ZipArchive::new(&mut file).unwrap();
-            let file = NamedTempFile::new().unwrap();
-            zip.extract(file.path()).unwrap();
-
+            let dir = TempDir::new().unwrap();
+            zip.extract(dir.path()).unwrap();
+            let mut read_dir = read_dir(dir.path()).unwrap();
+            let file_path = read_dir.next().unwrap().unwrap().path();
+            let file = std::fs::File::open(file_path).unwrap();
             let mut archive = tar::Archive::new(file);
             let mut read_dir_blue = std::fs::read_dir("app_blue").unwrap();
             let mut read_dir_green = std::fs::read_dir("app_green").unwrap();
