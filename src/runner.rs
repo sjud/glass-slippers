@@ -1,8 +1,16 @@
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Router};
-use serde::Deserialize;
-use std::{fs::File, sync::Arc};
-
 use crate::github_event::GithubEvent;
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Router};
+use nix::{
+    sys::signal::{self, Signal},
+    unistd::Pid,
+};
+use serde::Deserialize;
+use std::sync::Arc;
+use tempfile::{tempfile, NamedTempFile};
+use tokio::{
+    process::{Child, Command},
+    spawn,
+};
 
 #[derive(Clone, Deserialize, Debug)]
 pub struct RunnerConfigDeserialize {
@@ -10,13 +18,24 @@ pub struct RunnerConfigDeserialize {
     pub github_token: String,
     /// this is used to download the artifact
     pub github_api_key: String,
+    pub app_name: String,
+    pub runner_port: u16,
+    pub blue_server_address: String,
+    pub green_server_address: String,
 }
 
-impl From<RunnerConfigDeserialize> for RunnerConfig {
-    fn from(other: RunnerConfigDeserialize) -> RunnerConfig {
+impl RunnerConfig {
+    pub fn new(other: RunnerConfigDeserialize) -> RunnerConfig {
+        let (app_color_sender, app_color_receiver) = tokio::sync::watch::channel(AppColor::NoApp);
         RunnerConfig {
             github_token: Arc::new(other.github_token),
             github_api_key: Arc::new(other.github_api_key),
+            app_name: Arc::new(other.app_name),
+            app_color_sender,
+            app_color_receiver,
+            runner_port: other.runner_port,
+            blue_server_address: Arc::new(other.blue_server_address),
+            green_server_address: Arc::new(other.green_server_address),
         }
     }
 }
@@ -27,6 +46,19 @@ pub struct RunnerConfig {
     pub github_token: Arc<String>,
     /// this is used to download the artifact
     pub github_api_key: Arc<String>,
+    pub app_name: Arc<String>,
+    pub app_color_sender: tokio::sync::watch::Sender<AppColor>,
+    pub app_color_receiver: tokio::sync::watch::Receiver<AppColor>,
+    pub runner_port: u16,
+    pub blue_server_address: Arc<String>,
+    pub green_server_address: Arc<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum AppColor {
+    NoApp,
+    Blue,
+    Green,
 }
 
 #[derive(Deserialize, Debug)]
@@ -92,7 +124,6 @@ async fn handle_new_artifacts_webhook(
             .await
             .unwrap();
 
-        println!("{resp}");
         let artifacts = serde_json::from_str::<GetArtifactUrlResp>(&resp)
             .unwrap()
             .artifacts; //
@@ -105,32 +136,48 @@ async fn handle_new_artifacts_webhook(
                 .send()
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            let zip_file = format!("zips/{}.zip", artifact.name);
             // open in write only
-            let mut file = File::create(&zip_file).unwrap();
+            let mut file = tempfile().unwrap();
 
             let content = response.bytes().await.unwrap();
 
             std::io::copy(&mut content.as_ref(), &mut file).unwrap();
-            // open in read
-            let mut file = File::options()
-                .read(true)
-                .write(true)
-                .create(true)
-                .open(zip_file)
-                .unwrap();
 
             let mut zip = zip::ZipArchive::new(&mut file).unwrap();
+            let file = NamedTempFile::new().unwrap();
+            zip.extract(file.path()).unwrap();
 
-            zip.extract("unzipped").unwrap();
-
-            let file = File::open(format!("unzipped/app.tar")).unwrap();
-
-            // Create an archive from the file
             let mut archive = tar::Archive::new(file);
-
-            // Unpack the archive to the current directory
-            archive.unpack("unzipped").unwrap();
+            let mut read_dir_blue = std::fs::read_dir("app_blue").unwrap();
+            let mut read_dir_green = std::fs::read_dir("app_green").unwrap();
+            let app_color_sender = config.app_color_sender.clone();
+            let mut if_true_write_blue_else_green = |do_it: bool| {
+                if do_it {
+                    app_color_sender.send(AppColor::Blue).unwrap();
+                    archive.unpack("app_blue").unwrap();
+                } else {
+                    app_color_sender.send(AppColor::Green).unwrap();
+                    archive.unpack("app_green").unwrap();
+                }
+            };
+            // we set app color here we don't read from it. Which we could do, i.e use app color to decipher what to do next.
+            // but where would we decide what app color is?
+            if let Some(Ok(file)) = read_dir_blue.next() {
+                let first_blue_file_accessed = file.metadata().unwrap().accessed().unwrap();
+                if let Some(Ok(file)) = read_dir_green.next() {
+                    let first_green_file_accessed = file.metadata().unwrap().accessed().unwrap();
+                    // if blue has been accessed more recently write into green
+                    if first_blue_file_accessed > first_green_file_accessed {
+                        if_true_write_blue_else_green(false);
+                    } else {
+                        if_true_write_blue_else_green(true);
+                    }
+                } else {
+                    if_true_write_blue_else_green(true);
+                }
+            } else {
+                if_true_write_blue_else_green(true);
+            }
         }
 
         println!("Artifact downloaded successfully!");
@@ -141,11 +188,76 @@ async fn handle_new_artifacts_webhook(
 /// The runner listens for github web hooks, checks to see if they are pull requests on main whose checks passed.
 /// If so it fetches the artifact, as described in the Config.toml and starts the artifact (presuming its a server) in green/blue deployment style.
 pub async fn runner(config: RunnerConfig) {
+    let addr = format!("127.0.0.1:{}", config.runner_port);
+    let mut app_color_receiver = config.app_color_receiver.clone();
+    let mut app_color_sender = config.app_color_sender.clone();
+    let app_name = config.app_name.clone();
+    let blue_server_address = config.blue_server_address.clone();
+    let green_server_address = config.green_server_address.clone();
     let router: Router<()> = Router::new()
         .route("/github", post(handle_new_artifacts_webhook))
         .with_state(config);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    spawn(async move {
+        while app_color_receiver.changed().await.is_ok() {
+            let color = *app_color_receiver.borrow();
+            let mut blue_pid = None::<Pid>;
+            let mut green_pid = None::<Pid>;
+            match color {
+                AppColor::NoApp => {
+                    let mut read_dir_blue = std::fs::read_dir("app_blue").unwrap();
+                    let mut read_dir_green = std::fs::read_dir("app_green").unwrap();
+                    if let Some(Ok(file)) = read_dir_blue.next() {
+                        let first_blue_file_accessed = file.metadata().unwrap().accessed().unwrap();
+                        if let Some(Ok(file)) = read_dir_green.next() {
+                            let first_green_file_accessed =
+                                file.metadata().unwrap().accessed().unwrap();
+                            // if blue has been accessed more recently write into green
+                            if first_blue_file_accessed > first_green_file_accessed {
+                                app_color_sender.send(AppColor::Green).unwrap();
+                            } else {
+                                app_color_sender.send(AppColor::Blue).unwrap();
+                            }
+                        } else {
+                            app_color_sender.send(AppColor::Blue).unwrap();
+                        }
+                    } else {
+                        if let Some(Ok(_)) = read_dir_green.next() {
+                            app_color_sender.send(AppColor::Green).unwrap();
+                        } else {
+                            // no blue files, no green files, do nothing...
+                        }
+                    }
+                }
+                AppColor::Blue => {
+                    std::env::set_var("LEPTOS_SITE_ADDR", blue_server_address.as_ref());
+                    let app_path = format!("app_blue/{}", app_name.as_ref());
+                    let mut child = Command::new(app_path).spawn().unwrap(); // we can pipe the traces back to us and forward them to our observability service
+                    let pid = Pid::from_raw(child.id().expect("valid id here") as i32);
+                    spawn(async move {
+                        child.wait().await.unwrap();
+                    });
+                    blue_pid.replace(pid);
+                    if let Some(pid) = green_pid {
+                        signal::kill(pid, Signal::SIGKILL).unwrap();
+                    }
+                    // TODO kill after health check? should we communicate with our reverse proxy here to switch over (after health check)
+                }
+                AppColor::Green => {
+                    std::env::set_var("LEPTOS_SITE_ADDR", green_server_address.as_ref());
+                    let app_path = format!("app_green/{}", app_name.as_ref());
+                    let mut child = Command::new(app_path).spawn().unwrap(); // we can pipe the traces back to us and forward them to our observability service
+                    let pid = Pid::from_raw(child.id().expect("valid id here") as i32);
+                    spawn(async move {
+                        child.wait().await.unwrap();
+                    });
+                    green_pid.replace(pid);
+                    if let Some(pid) = blue_pid {
+                        signal::kill(pid, Signal::SIGKILL).unwrap();
+                    }
+                }
+            }
+        }
+    });
     axum::serve(listener, router).await.unwrap();
 }

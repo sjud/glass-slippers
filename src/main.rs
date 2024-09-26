@@ -1,4 +1,4 @@
-use runner::{RunnerConfig, RunnerConfigDeserialize};
+use runner::{AppColor, RunnerConfig, RunnerConfigDeserialize};
 
 /*
  the vps runner runs on the server that runs the webserver
@@ -55,9 +55,14 @@ async fn main() {
     // Deserialize the String into your RunnerConfig struct
     let config: RunnerConfigDeserialize =
         toml::from_str(&config_contents).expect("Config.toml to be valid toml");
-    let config = RunnerConfig::from(config);
+    let config = RunnerConfig::new(config);
 
     runner::runner(config).await;
+    /*
+       for our reverse proxy we need to run our runner (which is a server)
+       and we need to run our apps and then switch between them when forwarding traffic to our server
+       set the ports for each server manually by setting LEPTOS_ENV port var when running the servers
+    */
 }
 
 /*
