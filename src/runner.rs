@@ -113,11 +113,16 @@ async fn check_webhook(
             let content = response.bytes().await.unwrap();
 
             std::io::copy(&mut content.as_ref(), &mut file).unwrap();
-            let mut permissions = file.metadata().unwrap().permissions();
-            permissions.set_mode(0o777);
-            file.flush().unwrap();
-            file.sync_all().unwrap();
+
+            let mut file = std::fs::File::options()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(zip_file)
+                .unwrap();
+
             let mut zip = zip::ZipArchive::new(&mut file).unwrap();
+
             zip.extract("unzipped").unwrap();
         }
 
