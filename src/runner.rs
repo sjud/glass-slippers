@@ -197,6 +197,7 @@ pub async fn runner(config: RunnerConfig) {
     let router: Router<()> = Router::new()
         .route("/github", post(handle_new_artifacts_webhook))
         .with_state(config);
+    println!("Listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     spawn(async move {
         while app_color_receiver.changed().await.is_ok() {
