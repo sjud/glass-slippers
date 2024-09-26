@@ -71,7 +71,7 @@ jobs:
         run: |
           mkdir -p app/target/site
           cp target/release/dev-example app/dev_example
-          cp -r target/site app/target/site
+          cp -r target/site app/target
           tar -cvf app.tar -C app .
 
       - name: Upload App Bundle
