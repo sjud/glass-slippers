@@ -106,8 +106,7 @@ async fn check_webhook(
                 .send()
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            let zip_file = format!("{}.zip", artifact.name);
-            let unzipped_file = artifact.name;
+            let zip_file = format!("zips/{}.zip", artifact.name);
             let mut file =
                 std::fs::File::create(&zip_file).map_err(|_| StatusCode::INSUFFICIENT_STORAGE)?;
 
@@ -115,7 +114,8 @@ async fn check_webhook(
 
             std::io::copy(&mut content.as_ref(), &mut file).unwrap();
 
-            crate::unzip::unzip_file(&zip_file, &unzipped_file).unwrap();
+            let mut zip = zip::ZipArchive::new(&mut file).unwrap();
+            zip.extract("/unzipped").unwrap();
         }
 
         println!("Artifact downloaded successfully!");

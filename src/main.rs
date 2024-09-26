@@ -45,7 +45,7 @@ pingora reverse proxy (we're planning on running our server behind cloudflared a
 */
 pub mod github_event;
 pub mod runner;
-pub mod unzip;
+
 #[tokio::main]
 async fn main() {
     // Read the contents of the file into a String
