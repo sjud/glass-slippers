@@ -66,15 +66,17 @@ jobs:
         working-directory: examples/dev-example/end2end
         run: npx playwright test
 
-      - name: Upload Server Binary
+      - name: Tar App Bundle
+        working-directory: examples/dev-example
+        run: | 
+        mkdir app 
+        cp target/release/dev-example app/dev_example 
+        cp -r target/site app/target/site 
+        tar -cvf app.tar app
+
+      - name: Upload App Bundle
         uses: actions/upload-artifact@v4
         with:
           name: dev-example
-          path: examples/dev-example/target/release/dev-example
-      
-      - name: Upload Server Site
-        uses: actions/upload-artifact@v4
-        with:
-          name: dev-example-site
-          path: examples/dev-example/target/site/
-      
+          path: examples/dev-example/app.tar
+

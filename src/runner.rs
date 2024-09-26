@@ -1,8 +1,6 @@
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Router};
 use serde::Deserialize;
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
-use std::sync::Arc;
+use std::{fs::File, sync::Arc};
 
 use crate::github_event::GithubEvent;
 
@@ -109,13 +107,13 @@ async fn handle_new_artifacts_webhook(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             let zip_file = format!("zips/{}.zip", artifact.name);
             // open in write only
-            let mut file = std::fs::File::create(&zip_file).unwrap();
+            let mut file = File::create(&zip_file).unwrap();
 
             let content = response.bytes().await.unwrap();
 
             std::io::copy(&mut content.as_ref(), &mut file).unwrap();
             // open in read
-            let mut file = std::fs::File::options()
+            let mut file = File::options()
                 .read(true)
                 .write(true)
                 .create(true)
@@ -125,6 +123,14 @@ async fn handle_new_artifacts_webhook(
             let mut zip = zip::ZipArchive::new(&mut file).unwrap();
 
             zip.extract("unzipped").unwrap();
+
+            let file = File::open(format!("unzipped/app.tar")).unwrap();
+
+            // Create an archive from the file
+            let mut archive = tar::Archive::new(file);
+
+            // Unpack the archive to the current directory
+            archive.unpack("unzipped").unwrap();
         }
 
         println!("Artifact downloaded successfully!");
