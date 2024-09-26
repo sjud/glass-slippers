@@ -68,11 +68,11 @@ jobs:
 
       - name: Tar App Bundle
         working-directory: examples/dev-example
-        run: | 
-        mkdir app 
-        cp target/release/dev-example app/dev_example 
-        cp -r target/site app/target/site 
-        tar -cvf app.tar app
+        run: |
+          mkdir app
+          cp target/release/dev-example app/dev_example
+          cp -r target/site app/target/site
+          tar -cvf app.tar app
 
       - name: Upload App Bundle
         uses: actions/upload-artifact@v4
