@@ -1,7 +1,7 @@
-use std::sync::Arc;
-
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Router};
 use serde::Deserialize;
+use std::os::unix::fs::PermissionsExt;
+use std::sync::Arc;
 
 use crate::github_event::GithubEvent;
 
@@ -107,13 +107,13 @@ async fn check_webhook(
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             let zip_file = format!("zips/{}.zip", artifact.name);
-            let mut file =
-                std::fs::File::create(&zip_file).map_err(|_| StatusCode::INSUFFICIENT_STORAGE)?;
+            let mut file = std::fs::File::create(&zip_file).unwrap();
 
             let content = response.bytes().await.unwrap();
 
             std::io::copy(&mut content.as_ref(), &mut file).unwrap();
-
+            let mut permissions = file.metadata().unwrap().permissions();
+            permissions.set_mode(0o777);
             let mut zip = zip::ZipArchive::new(&mut file).unwrap();
             zip.extract("unzipped").unwrap();
         }
