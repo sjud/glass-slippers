@@ -1,5 +1,6 @@
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Router};
 use serde::Deserialize;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
@@ -114,6 +115,8 @@ async fn check_webhook(
             std::io::copy(&mut content.as_ref(), &mut file).unwrap();
             let mut permissions = file.metadata().unwrap().permissions();
             permissions.set_mode(0o777);
+            file.flush().unwrap();
+            file.sync_all().unwrap();
             let mut zip = zip::ZipArchive::new(&mut file).unwrap();
             zip.extract("unzipped").unwrap();
         }
