@@ -6,11 +6,8 @@ use nix::{
 };
 use serde::Deserialize;
 use std::{fs::read_dir, sync::Arc};
-use tempfile::{tempfile, NamedTempFile, TempDir};
-use tokio::{
-    process::{Child, Command},
-    spawn,
-};
+use tempfile::{tempfile, TempDir};
+use tokio::{process::Command, spawn};
 
 #[derive(Clone, Deserialize, Debug)]
 pub struct RunnerConfigDeserialize {
@@ -22,6 +19,8 @@ pub struct RunnerConfigDeserialize {
     pub runner_port: u16,
     pub blue_server_address: String,
     pub green_server_address: String,
+    pub repo_owner: String,
+    pub repo_name: String,
 }
 
 impl RunnerConfig {
@@ -36,6 +35,8 @@ impl RunnerConfig {
             runner_port: other.runner_port,
             blue_server_address: Arc::new(other.blue_server_address),
             green_server_address: Arc::new(other.green_server_address),
+            repo_owner: Arc::new(other.repo_owner),
+            repo_name: Arc::new(other.repo_name),
         }
     }
 }
@@ -52,6 +53,8 @@ pub struct RunnerConfig {
     pub runner_port: u16,
     pub blue_server_address: Arc<String>,
     pub green_server_address: Arc<String>,
+    pub repo_owner: Arc<String>,
+    pub repo_name: Arc<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -155,11 +158,11 @@ async fn handle_new_artifacts_webhook(
             let app_color_sender = config.app_color_sender.clone();
             let mut if_true_write_blue_else_green = |do_it: bool| {
                 if do_it {
-                    app_color_sender.send(AppColor::Blue).unwrap();
                     archive.unpack("app_blue").unwrap();
+                    app_color_sender.send(AppColor::Blue).unwrap();
                 } else {
-                    app_color_sender.send(AppColor::Green).unwrap();
                     archive.unpack("app_green").unwrap();
+                    app_color_sender.send(AppColor::Green).unwrap();
                 }
             };
             // we set app color here we don't read from it. Which we could do, i.e use app color to decipher what to do next.
@@ -192,8 +195,13 @@ async fn handle_new_artifacts_webhook(
 pub async fn runner(config: RunnerConfig) {
     let addr = format!("127.0.0.1:{}", config.runner_port);
     let mut app_color_receiver = config.app_color_receiver.clone();
-    let mut app_color_sender = config.app_color_sender.clone();
+    let app_color_sender = config.app_color_sender.clone();
+    let sender_c = app_color_sender.clone();
+    let repo_owner = config.repo_owner.clone();
+    let repo_name = config.repo_name.clone();
     let app_name = config.app_name.clone();
+    let token = config.github_api_key.clone();
+
     let blue_server_address = config.blue_server_address.clone();
     let green_server_address = config.green_server_address.clone();
     let router: Router<()> = Router::new()
@@ -228,14 +236,69 @@ pub async fn runner(config: RunnerConfig) {
                         if let Some(Ok(_)) = read_dir_green.next() {
                             app_color_sender.send(AppColor::Green).unwrap();
                         } else {
-                            // no blue files, no green files, do nothing...
+                            // fetch the latest artifact and write it to app_blue
+
+                            let client = reqwest::Client::new();
+                            let artifacts_url = format!("https://api.github.com/repos/{repo_owner}/{repo_name}/actions/artifacts");
+                            let artifacts = client
+                                .get(artifacts_url)
+                                .header(reqwest::header::USER_AGENT, "Glass-Slippers")
+                                //.header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token))
+                                .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+                                .send()
+                                .await
+                                .unwrap()
+                                .json::<GetArtifactUrlResp>()
+                                .await
+                                .unwrap()
+                                .artifacts;
+                            if let Some(artifact_url) = artifacts
+                                .iter()
+                                .next()
+                                .map(|art| art.archive_download_url.clone())
+                            {
+                                let response = client
+                                    .get(artifact_url)
+                                    .header(reqwest::header::USER_AGENT, "Glass-Slippers")
+                                    .header(
+                                        reqwest::header::AUTHORIZATION,
+                                        format!("Bearer {}", token),
+                                    )
+                                    .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+                                    .send()
+                                    .await
+                                    .unwrap();
+                                // open in write only
+                                let mut file = tempfile().unwrap();
+
+                                let content = response.bytes().await.unwrap();
+
+                                std::io::copy(&mut content.as_ref(), &mut file).unwrap();
+
+                                let mut zip = zip::ZipArchive::new(&mut file).unwrap();
+                                let dir = TempDir::new().unwrap();
+                                zip.extract(dir.path()).unwrap();
+                                let mut read_dir = read_dir(dir.path()).unwrap();
+                                let file_path = read_dir.next().unwrap().unwrap().path();
+                                let file = std::fs::File::open(file_path).unwrap();
+                                let mut archive = tar::Archive::new(file);
+                                archive.unpack("app_blue").unwrap();
+                                app_color_sender.send(AppColor::Blue).unwrap();
+                            }
+                            // list artifacts
                         }
                     }
                 }
                 AppColor::Blue => {
                     std::env::set_var("LEPTOS_SITE_ADDR", blue_server_address.as_ref());
-                    let app_path = format!("app_blue/{}", app_name.as_ref());
-                    let mut child = Command::new(app_path).spawn().unwrap(); // we can pipe the traces back to us and forward them to our observability service
+                    let working_dir = std::fs::canonicalize("app_blue")
+                        .unwrap()
+                        .into_os_string()
+                        .into_string()
+                        .unwrap();
+                    let path = format!("{}/{}", working_dir, app_name.as_ref());
+                    println!("Running {}", path);
+                    let mut child = Command::new(path).current_dir(working_dir).spawn().unwrap(); // we can pipe the traces back to us and forward them to our observability service
                     let pid = Pid::from_raw(child.id().expect("valid id here") as i32);
                     spawn(async move {
                         child.wait().await.unwrap();
@@ -248,8 +311,14 @@ pub async fn runner(config: RunnerConfig) {
                 }
                 AppColor::Green => {
                     std::env::set_var("LEPTOS_SITE_ADDR", green_server_address.as_ref());
-                    let app_path = format!("app_green/{}", app_name.as_ref());
-                    let mut child = Command::new(app_path).spawn().unwrap(); // we can pipe the traces back to us and forward them to our observability service
+                    let working_dir = std::fs::canonicalize("app_green")
+                        .unwrap()
+                        .into_os_string()
+                        .into_string()
+                        .unwrap();
+                    let path = format!("{}/{}", working_dir, app_name.as_ref());
+                    println!("Running {}", path);
+                    let mut child = Command::new(path).current_dir(working_dir).spawn().unwrap(); // we can pipe the traces back to us and forward them to our observability service
                     let pid = Pid::from_raw(child.id().expect("valid id here") as i32);
                     spawn(async move {
                         child.wait().await.unwrap();
@@ -262,5 +331,7 @@ pub async fn runner(config: RunnerConfig) {
             }
         }
     });
+    // our init value starts as seen so send a new value to get the ball rolling.
+    sender_c.send(AppColor::NoApp).unwrap();
     axum::serve(listener, router).await.unwrap();
 }
