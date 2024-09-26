@@ -3,3 +3,5 @@
 Config.toml
 /unzipped
 /zips
+/app_blue/*
+/app_green/*

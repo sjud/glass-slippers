@@ -178,7 +178,8 @@ async fn handle_new_artifacts_webhook(
                         if_true_write_blue_else_green(true);
                     }
                 } else {
-                    if_true_write_blue_else_green(true);
+                    // if green is empty write into green
+                    if_true_write_blue_else_green(false);
                 }
             } else {
                 if_true_write_blue_else_green(true);
