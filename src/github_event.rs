@@ -9,14 +9,14 @@ use std::fmt::Display;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 
-use crate::runner::RunnerConfig;
+use crate::runner::RunnerState;
 
 /// State to provide the Github Token to verify Event signature.
 #[derive(Debug, Clone)]
 pub struct GithubToken(pub Arc<String>);
-impl FromRef<RunnerConfig> for GithubToken {
-    fn from_ref(config: &RunnerConfig) -> GithubToken {
-        GithubToken(config.github_token.clone())
+impl FromRef<RunnerState> for GithubToken {
+    fn from_ref(state: &RunnerState) -> GithubToken {
+        GithubToken(state.config.github_token.clone())
     }
 }
 /// Verify and extract Github Event Payload.

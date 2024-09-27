@@ -1,4 +1,4 @@
-use runner::{AppColor, RunnerConfig, RunnerConfigDeserialize};
+use runner::{RunnerConfig, RunnerConfigDeserialize};
 
 /*
  the vps runner runs on the server that runs the webserver
@@ -57,7 +57,11 @@ async fn main() {
         toml::from_str(&config_contents).expect("Config.toml to be valid toml");
     let config = RunnerConfig::new(config);
 
-    runner::runner(config).await;
+    runner::runner(runner::RunnerState {
+        config,
+        client: std::sync::Arc::new(runner::HttpClient(reqwest::Client::new())),
+    })
+    .await;
     /*
        for our reverse proxy we need to run our runner (which is a server)
        and we need to run our apps and then switch between them when forwarding traffic to our server

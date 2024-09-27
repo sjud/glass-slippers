@@ -33,7 +33,7 @@ pub fn App() -> impl IntoView {
         // id=leptos means cargo-leptos will hot-reload this stylesheet
         <Stylesheet id="leptos" href="/pkg/dev-example.css"/>
 
-        // sets the document title
+        // sets the document titlej
         <Title text="Welcome to Leptos"/>
 
         // content for this welcome page
