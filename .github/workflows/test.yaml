@@ -1,4 +1,4 @@
-name: Build Dev Example
+name: Test Glass-Slippers
 
 on:
   push:
