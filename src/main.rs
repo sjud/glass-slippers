@@ -56,17 +56,18 @@ async fn main() {
     let config: RunnerConfigDeserialize =
         toml::from_str(&config_contents).expect("Config.toml to be valid toml");
     let config = RunnerConfig::new(config);
-
-    runner::runner(runner::RunnerState {
+    let runner_state = runner::RunnerState {
         config,
         client: std::sync::Arc::new(runner::HttpClient(reqwest::Client::new())),
-    })
-    .await;
+    };
+    runner::runner_with_init(runner_state).await;
     /*
        for our reverse proxy we need to run our runner (which is a server)
        and we need to run our apps and then switch between them when forwarding traffic to our server
        set the ports for each server manually by setting LEPTOS_ENV port var when running the servers
     */
+    // requires a service to forward /github requests to port 5000, and a way to switch between ENV_BLUE_PORT for blue server and ENV_GREEN_PORT for green server
+    // so the runner needs to communicate up to the reverse proxy?
 }
 
 /*

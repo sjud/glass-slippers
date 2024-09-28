@@ -196,6 +196,14 @@ async fn fetch_and_unpack_most_recent_artifact(
         archive.unpack(tar_destination).unwrap();
     }
 }
+
+/// Builds the runner, and sends an initial command to begin running the server.
+pub async fn runner_with_init(state: RunnerState) {
+    let sender = state.config.fetch_artifact_sender.clone();
+    runner(state).await;
+    sender.send(()).unwrap();
+}
+
 /// The runner listens for github web hooks, checks to see if they are pull requests on main whose checks passed.
 /// If so it fetches the artifact, as described in the Config.toml and starts the artifact (presuming its a server) in green/blue deployment style.
 pub async fn runner(state: RunnerState) {
@@ -449,6 +457,7 @@ repo_name = "glass-slippers"
             .expect_list_artifacts()
             .returning(|_| vec![Artifact::default()]);
         let mut buf = Vec::new();
+        println!("Current working directory: {:?}", std::env::current_dir());
         _ = std::fs::File::open("test_data/app-tar.zip")
             .expect("Run test in crate root.")
             .read_to_end(&mut buf)

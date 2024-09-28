@@ -4,11 +4,12 @@ on:
   push:
 
 jobs:
-  build-and-test:
+  test-glass-slippers:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
+         fetch-depth: 0
+         
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -27,7 +28,10 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       
       - name: Test
-        run: cargo test -- --nocapture
+        run: |
+        ls -al
+        ls -al test_data 
+        cargo test -- --nocapture
       
 
 
