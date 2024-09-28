@@ -32,6 +32,8 @@ jobs:
         run: |
           ls -al
           ls -al test_data 
+          mkdir app_blue
+          mkdir app_green
           cargo test -- --nocapture
       
 
