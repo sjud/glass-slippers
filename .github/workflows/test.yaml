@@ -29,9 +29,9 @@ jobs:
       
       - name: Test
         run: |
-        ls -al
-        ls -al test_data 
-        cargo test -- --nocapture
+          ls -al
+          ls -al test_data 
+          cargo test -- --nocapture
       
 
 
