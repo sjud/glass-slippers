@@ -1,0 +1,22 @@
+# Server configuration
+
+version = 1
+daemon = false
+error_log = ""  # Default is StdErr when not in daemon mode
+pid_file = "/var/run/server.pid"
+upgrade_sock = "/var/run/upgrade.sock"
+user = ""  # Optional: set a user if needed
+group = ""  # Optional: set a group if needed
+threads = 4  # Default thread count for each service
+work_stealing = true
+ca_file = ""  # Optional: set path to CA file if needed
+grace_period_seconds = 60  # Default grace period for graceful shutdown
+graceful_shutdown_timeout_seconds = 30  # Timeout for the final step of graceful shutdown
+
+# These fields are service-specific and may be subject to change
+client_bind_to_ipv4 = []  # List of IPv4 addresses to bind to
+client_bind_to_ipv6 = []  # List of IPv6 addresses to bind to
+upstream_keepalive_pool_size = 10  # Default keepalive pool size for upstream connections
+upstream_connect_offload_threadpools = 2  # Optional: number of dedicated thread pools for connection establishment
+upstream_connect_offload_thread_per_pool = 4  # Optional: threads per connection pool
+upstream_debug_ssl_keylog = false  # Disabled by default for security reasons
