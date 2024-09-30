@@ -1,4 +1,4 @@
-use crate::github_event::GithubEvent;
+use crate::{github_event::GithubEvent, MAIN_SERVER_PORT};
 use axum::{
     async_trait, extract::State, http::StatusCode, response::IntoResponse, routing::post, Router,
 };
@@ -7,8 +7,13 @@ use nix::{
     sys::signal::{self, Signal},
     unistd::Pid,
 };
+use reqwest::Url;
 use serde::Deserialize;
-use std::{fs::read_dir, sync::Arc};
+use std::{
+    fs::read_dir,
+    str::FromStr,
+    sync::{Arc, Mutex},
+};
 use tempfile::{tempfile, TempDir};
 use tokio::{process::Command, spawn};
 
@@ -31,41 +36,67 @@ impl RunnerConfig {
         let (fetch_artifact_sender, fetch_artifact_receiver) = tokio::sync::watch::channel(());
 
         RunnerConfig {
-            github_token: Arc::new(other.github_token),
-            github_api_key: Arc::new(other.github_api_key),
-            app_name: Arc::new(other.app_name),
+            github_token: other.github_token,
+            github_api_key: other.github_api_key,
+            app_name: other.app_name,
             fetch_artifact_sender,
             fetch_artifact_receiver,
             runner_port: other.runner_port,
-            blue_server_address: Arc::new(other.blue_server_address),
-            green_server_address: Arc::new(other.green_server_address),
-            repo_owner: Arc::new(other.repo_owner),
-            repo_name: Arc::new(other.repo_name),
+            blue_server_address: other.blue_server_address,
+            green_server_address: other.green_server_address,
+            repo_owner: other.repo_owner,
+            repo_name: other.repo_name,
         }
+    }
+    #[cfg(test)]
+    pub fn new_test() -> Self {
+        let config: RunnerConfigDeserialize = toml::from_str(
+            &r#"
+        github_token = ""
+github_api_key = ""
+app_name = "dev_example"
+runner_port = 5000
+blue_server_address = "127.0.0.1:3000"
+green_server_address = "127.0.0.1:3001"
+repo_owner = "sjud"
+repo_name = "glass-slippers"
+        "#,
+        )
+        .expect("Config.toml to be valid toml");
+        Self::new(config)
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct RunnerState {
-    pub config: RunnerConfig,
+    pub config: Arc<RunnerConfig>,
     pub client: Arc<dyn RunnerHttpClient>,
+}
+
+impl RunnerState {
+    pub fn new(config: RunnerConfig, client: impl RunnerHttpClient + 'static) -> Self {
+        Self {
+            config: Arc::new(config),
+            client: Arc::new(client),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct RunnerConfig {
     /// this is used to confirm the webhook signature
-    pub github_token: Arc<String>,
+    pub github_token: String,
     /// this is used to download the artifact
-    pub github_api_key: Arc<String>,
-    pub app_name: Arc<String>,
+    pub github_api_key: String,
+    pub app_name: String,
     pub fetch_artifact_sender: tokio::sync::watch::Sender<()>,
     pub fetch_artifact_receiver: tokio::sync::watch::Receiver<()>,
 
     pub runner_port: u16,
-    pub blue_server_address: Arc<String>,
-    pub green_server_address: Arc<String>,
-    pub repo_owner: Arc<String>,
-    pub repo_name: Arc<String>,
+    pub blue_server_address: String,
+    pub green_server_address: String,
+    pub repo_owner: String,
+    pub repo_name: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -120,56 +151,60 @@ async fn handle_new_artifacts_webhook(
     Ok(())
 }
 
-fn run_blue(
-    blue_pid: &mut Option<Pid>,
-    green_pid: &mut Option<Pid>,
-    blue_server_address: &str,
+/// Runs blue or green server , if blue run blue...
+fn run_blue_green(
+    blue_pid: Arc<Mutex<Option<Pid>>>,
+    green_pid: Arc<Mutex<Option<Pid>>>,
+    green_server_address: String,
+    blue_server_address: String,
     app_name: &str,
+    blue: bool,
 ) {
-    std::env::set_var("LEPTOS_SITE_ADDR", blue_server_address);
-    let working_dir = std::fs::canonicalize("app_blue")
+    let server_address = if blue {
+        blue_server_address
+    } else {
+        green_server_address
+    };
+    let dir_name = if blue { "app_blue" } else { "app_green" };
+    std::env::set_var("LEPTOS_SITE_ADDR", &server_address);
+    let server_address = Url::from_str(&format!("http://{server_address}")).unwrap();
+    let working_dir = std::fs::canonicalize(dir_name)
         .unwrap()
         .into_os_string()
         .into_string()
         .unwrap();
     let path = format!("{}/{}", working_dir, app_name);
     println!("Running {}", path);
-    let mut child = Command::new(path).current_dir(working_dir).spawn().unwrap(); // we can pipe the traces back to us and forward them to our observability service
+    let mut child = Command::new(path).current_dir(working_dir).spawn().unwrap();
+    // TODO we can pipe the traces back to us and forward them to our observability service
     let pid = Pid::from_raw(child.id().expect("valid id here") as i32);
     spawn(async move {
         child.wait().await.unwrap();
     });
-    blue_pid.replace(pid);
-    if let Some(pid) = green_pid.take() {
-        println!("Killing {pid:#?}");
-        signal::kill(pid, Signal::SIGKILL).unwrap();
+    if blue {
+        blue_pid.lock().unwrap().replace(pid);
+    } else {
+        green_pid.lock().unwrap().replace(pid);
     }
-}
-
-fn run_green(
-    blue_pid: &mut Option<Pid>,
-    green_pid: &mut Option<Pid>,
-    green_server_address: &str,
-    app_name: &str,
-) {
-    std::env::set_var("LEPTOS_SITE_ADDR", green_server_address);
-    let working_dir = std::fs::canonicalize("app_green")
-        .unwrap()
-        .into_os_string()
-        .into_string()
-        .unwrap();
-    let path = format!("{}/{}", working_dir, app_name);
-    println!("Running {}", path);
-    let mut child = Command::new(path).current_dir(working_dir).spawn().unwrap(); // we can pipe the traces back to us and forward them to our observability service
-    let pid = Pid::from_raw(child.id().expect("valid id here") as i32);
     spawn(async move {
-        child.wait().await.unwrap();
+        let port = server_address
+            .port()
+            .expect("server address to contain port");
+        healthcheck(server_address).await;
+        let mut main_port = MAIN_SERVER_PORT.write().unwrap();
+        *main_port = Some(port);
+        println!("Wrote {port} to main server port");
+        if let Some(pid) = {
+            if blue {
+                green_pid.lock().unwrap().take()
+            } else {
+                blue_pid.lock().unwrap().take()
+            }
+        } {
+            println!("Killing {pid:#?}");
+            signal::kill(pid, Signal::SIGKILL).unwrap();
+        }
     });
-    green_pid.replace(pid);
-    if let Some(pid) = blue_pid.take() {
-        println!("Killing {pid:#?}");
-        signal::kill(pid, Signal::SIGKILL).unwrap();
-    }
 }
 
 async fn fetch_and_unpack_most_recent_artifact(
@@ -200,10 +235,115 @@ async fn fetch_and_unpack_most_recent_artifact(
 /// Builds the runner, and sends an initial command to begin running the server.
 pub async fn runner_with_init(state: RunnerState) {
     let sender = state.config.fetch_artifact_sender.clone();
+    spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        sender.send(()).unwrap();
+    });
     runner(state).await;
-    sender.send(()).unwrap();
 }
+pub async fn fetch_run_green_blue(RunnerState { config, client }: RunnerState) {
+    let RunnerConfig {
+        github_api_key,
+        app_name,
+        mut fetch_artifact_receiver,
+        blue_server_address,
+        green_server_address,
+        repo_owner,
+        repo_name,
+        ..
+    } = (*config).clone();
+    let blue_pid = Arc::new(Mutex::new(None::<Pid>));
+    let green_pid = Arc::new(Mutex::new(None::<Pid>));
 
+    while fetch_artifact_receiver.changed().await.is_ok() {
+        let blue_pid = blue_pid.clone();
+        let green_pid = green_pid.clone();
+        let blue_server_address = blue_server_address.clone();
+        let green_server_address = green_server_address.clone();
+        let client = client.clone();
+        let mut read_dir_blue = std::fs::read_dir("app_blue").unwrap();
+        let mut read_dir_green = std::fs::read_dir("app_green").unwrap();
+        if read_dir_blue.next().is_some() {
+            if read_dir_green.next().is_some() {
+                if std::fs::metadata("app_blue").unwrap().modified().unwrap()
+                    > std::fs::metadata("app_green").unwrap().modified().unwrap()
+                {
+                    println!("blue has been modified more recently write into green");
+                    fetch_and_unpack_most_recent_artifact(
+                        client,
+                        github_api_key.as_ref(),
+                        repo_owner.as_ref(),
+                        repo_name.as_ref(),
+                        "app_green",
+                    )
+                    .await;
+                    run_blue_green(
+                        blue_pid,
+                        green_pid,
+                        green_server_address,
+                        blue_server_address,
+                        app_name.as_ref(),
+                        false,
+                    );
+                } else {
+                    println!("green has been modified more recently write into blue");
+                    fetch_and_unpack_most_recent_artifact(
+                        client,
+                        github_api_key.as_ref(),
+                        repo_owner.as_ref(),
+                        repo_name.as_ref(),
+                        "app_blue",
+                    )
+                    .await;
+                    run_blue_green(
+                        blue_pid,
+                        green_pid,
+                        green_server_address,
+                        blue_server_address,
+                        app_name.as_ref(),
+                        true,
+                    );
+                }
+            } else {
+                println!("blue is not empty and green is empty, write into green");
+                fetch_and_unpack_most_recent_artifact(
+                    client,
+                    github_api_key.as_ref(),
+                    repo_owner.as_ref(),
+                    repo_name.as_ref(),
+                    "app_green",
+                )
+                .await;
+                run_blue_green(
+                    blue_pid,
+                    green_pid,
+                    green_server_address,
+                    blue_server_address,
+                    app_name.as_ref(),
+                    false,
+                );
+            }
+        } else {
+            println!("blue is empty write into blue");
+            fetch_and_unpack_most_recent_artifact(
+                client,
+                github_api_key.as_ref(),
+                repo_owner.as_ref(),
+                repo_name.as_ref(),
+                "app_blue",
+            )
+            .await;
+            run_blue_green(
+                blue_pid,
+                green_pid,
+                green_server_address,
+                blue_server_address,
+                app_name.as_ref(),
+                true,
+            );
+        }
+    }
+}
 /// The runner listens for github web hooks, checks to see if they are pull requests on main whose checks passed.
 /// If so it fetches the artifact, as described in the Config.toml and starts the artifact (presuming its a server) in green/blue deployment style.
 pub async fn runner(state: RunnerState) {
@@ -215,103 +355,7 @@ pub async fn runner(state: RunnerState) {
         .with_state(state);
     println!("Listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    spawn(async move {
-        let RunnerState {
-            config:
-                RunnerConfig {
-                    github_api_key,
-                    app_name,
-                    mut fetch_artifact_receiver,
-                    blue_server_address,
-                    green_server_address,
-                    repo_owner,
-                    repo_name,
-                    ..
-                },
-            client,
-        } = state_c;
-
-        let mut blue_pid = None::<Pid>;
-        let mut green_pid = None::<Pid>;
-
-        while fetch_artifact_receiver.changed().await.is_ok() {
-            let client = client.clone();
-            let mut read_dir_blue = std::fs::read_dir("app_blue").unwrap();
-            let mut read_dir_green = std::fs::read_dir("app_green").unwrap();
-            if read_dir_blue.next().is_some() {
-                if read_dir_green.next().is_some() {
-                    if std::fs::metadata("app_blue").unwrap().modified().unwrap()
-                        > std::fs::metadata("app_green").unwrap().modified().unwrap()
-                    {
-                        println!("blue has been modified more recently write into green");
-                        fetch_and_unpack_most_recent_artifact(
-                            client,
-                            github_api_key.as_ref(),
-                            repo_owner.as_ref(),
-                            repo_name.as_ref(),
-                            "app_green",
-                        )
-                        .await;
-                        run_green(
-                            &mut blue_pid,
-                            &mut green_pid,
-                            green_server_address.as_ref(),
-                            app_name.as_ref(),
-                        );
-                    } else {
-                        println!("green has been modified more recently write into blue");
-                        fetch_and_unpack_most_recent_artifact(
-                            client,
-                            github_api_key.as_ref(),
-                            repo_owner.as_ref(),
-                            repo_name.as_ref(),
-                            "app_blue",
-                        )
-                        .await;
-                        run_blue(
-                            &mut blue_pid,
-                            &mut green_pid,
-                            blue_server_address.as_ref(),
-                            app_name.as_ref(),
-                        );
-                    }
-                } else {
-                    println!("blue is not empty and green is empty, write into green");
-                    fetch_and_unpack_most_recent_artifact(
-                        client,
-                        github_api_key.as_ref(),
-                        repo_owner.as_ref(),
-                        repo_name.as_ref(),
-                        "app_green",
-                    )
-                    .await;
-                    run_green(
-                        &mut blue_pid,
-                        &mut green_pid,
-                        green_server_address.as_ref(),
-                        app_name.as_ref(),
-                    );
-                }
-            } else {
-                println!("blue is empty write into blue");
-                fetch_and_unpack_most_recent_artifact(
-                    client,
-                    github_api_key.as_ref(),
-                    repo_owner.as_ref(),
-                    repo_name.as_ref(),
-                    "app_blue",
-                )
-                .await;
-                run_blue(
-                    &mut blue_pid,
-                    &mut green_pid,
-                    blue_server_address.as_ref(),
-                    app_name.as_ref(),
-                );
-            }
-        }
-    });
-
+    spawn(fetch_run_green_blue(state_c));
     axum::serve(listener, router).await.unwrap();
 }
 #[mockall::automock]
@@ -362,26 +406,32 @@ impl RunnerHttpClient for HttpClient {
             .unwrap()
     }
 }
-#[cfg(test)]
-pub mod tests {
-    use std::collections::HashMap;
-    use std::{io::Read, time::Duration};
-
-    use tokio::time::sleep;
-
-    use super::*;
-
-    async fn healthcheck(addr: &str) {
-        loop {
-            sleep(Duration::from_secs(1)).await;
-            if let Ok(resp) = reqwest::Client::new().get(addr).send().await {
+/// block until addr is healthy, if addr never gets healthy then this will block forever.
+async fn healthcheck(addr: Url) {
+    loop {
+        let addr = addr.as_str();
+        println!("checking {addr:#?}");
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        match reqwest::Client::new().get(addr).send().await {
+            Ok(resp) => {
                 if resp.status().is_success() {
                     println!("{addr} healthy");
                     break;
+                } else {
+                    println!("bad status {:#?}", resp.status())
                 }
             }
+            Err(err) => {} //println!("{err:#?}"),
         }
     }
+}
+#[cfg(test)]
+pub mod tests {
+    use std::collections::HashMap;
+    use std::io::Read;
+
+    use super::*;
+
     use std::fs;
 
     fn remove_dir_contents(dir: &str) -> std::io::Result<()> {
@@ -438,20 +488,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_switch() {
         kill_process_on_ports(vec![3000, 3001]);
-        let config: RunnerConfigDeserialize = toml::from_str(
-            &r#"
-        github_token = ""
-github_api_key = ""
-app_name = "dev_example"
-runner_port = 5000
-blue_server_address = "127.0.0.1:3000"
-green_server_address = "127.0.0.1:3001"
-repo_owner = "sjud"
-repo_name = "glass-slippers"
-        "#,
-        )
-        .expect("Config.toml to be valid toml");
-        let config = RunnerConfig::new(config);
+        let config = RunnerConfig::new_test();
         let mut client = MockHttpClient::new();
         client
             .expect_list_artifacts()
@@ -471,22 +508,27 @@ repo_name = "glass-slippers"
         remove_dir_contents("app_green").unwrap();
         spawn(async move {
             runner(RunnerState {
-                config,
+                config: Arc::new(config),
                 client: Arc::new(client),
             })
             .await;
         });
-        let blue_addr = "http://127.0.0.1:3000";
-        let green_addr = "http://127.0.0.1:3001";
+        let blue_addr = Url::from_str("http://127.0.0.1:3000").unwrap();
+        let green_addr = Url::from_str("http://127.0.0.1:3001").unwrap();
+
         // our init value starts as seen so send a new value to get the ball rolling.
         sender.send(()).unwrap();
-        healthcheck(blue_addr).await;
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        //healthcheck(blue_addr.clone()).await;
         sender.send(()).unwrap();
-        healthcheck(green_addr).await;
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        //healthcheck(green_addr.clone()).await;
         sender.send(()).unwrap();
-        healthcheck(blue_addr).await;
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        //healthcheck(blue_addr.clone()).await;
         sender.send(()).unwrap();
-        healthcheck(green_addr).await;
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        //healthcheck(green_addr.clone()).await;
         //cleanup
         kill_process_on_ports(vec![3000, 3001]);
         remove_dir_contents("app_blue").unwrap();

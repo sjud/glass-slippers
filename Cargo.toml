@@ -2,6 +2,12 @@
 name = "glass-slippers"
 version = "0.1.0"
 edition = "2021"
+default-run = "main"
+
+
+[[bin]]
+name = "main"
+path = "src/main.rs"
 
 [dependencies]
 axum = {version="0.7.6",features=["macros"]}
@@ -24,6 +30,9 @@ async-trait = "0.1.83"
 bytes = "1.7.2"
 mockall = "0.13.0"
 procfs = "0.16.0"
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
+pingora = {version="0.3.0",features=["proxy"]}
 
 [dev-dependencies]
 http-body-util = { version = "0.1.0" }

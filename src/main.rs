@@ -1,4 +1,77 @@
-use runner::{RunnerConfig, RunnerConfigDeserialize};
+use glass_slippers::{
+    runner::{self, RunnerConfig, RunnerConfigDeserialize},
+    MAIN_SERVER_PORT,
+};
+use std::sync::Arc;
+
+use pingora::{
+    prelude::{background_service, HttpPeer},
+    server::configuration::ServerConf,
+    services::background::BackgroundService,
+};
+use tokio::sync::watch::Receiver;
+fn main() {
+    let mut proxy = pingora::proxy::http_proxy_service(&Arc::new(ServerConf::default()), Proxy {});
+    let mut runner_bg = background_service("runner", RunnerBackgroundService);
+    proxy.add_tcp("127.0.0.1:8000");
+    let mut my_server = pingora::server::Server::new(None).unwrap();
+    //my_server.bootstrap();
+    // run add service after bootstrap? probably because if we take over a previous running instance add service
+    my_server.add_service(proxy);
+    my_server.add_service(runner_bg);
+    my_server.run_forever();
+}
+
+pub struct RunnerBackgroundService;
+#[async_trait::async_trait]
+impl BackgroundService for RunnerBackgroundService {
+    async fn start(&self, _: Receiver<bool>) {
+        let config_contents =
+            std::fs::read_to_string("Config.toml").expect("Config file in crate root.");
+
+        // Deserialize the String into your RunnerConfig struct
+        let config: RunnerConfigDeserialize =
+            toml::from_str(&config_contents).expect("Config.toml to be valid toml");
+        let config = Arc::new(RunnerConfig::new(config));
+        let runner_state = runner::RunnerState {
+            config,
+            client: std::sync::Arc::new(runner::HttpClient(reqwest::Client::new())),
+        };
+        runner::runner_with_init(runner_state).await;
+    }
+}
+
+pub struct Proxy;
+#[async_trait::async_trait]
+impl pingora::prelude::ProxyHttp for Proxy {
+    type CTX = ();
+    fn new_ctx(&self) {}
+    async fn upstream_peer(
+        &self,
+        session: &mut pingora::prelude::Session,
+        ctx: &mut Self::CTX,
+    ) -> pingora::Result<Box<HttpPeer>> {
+        let parts = session.req_header().as_ref();
+        let leading = parts.uri.path().split("/").next().unwrap_or_default();
+        let address = match leading {
+            "/github" => ("127.0.0.1", 5000),
+            _ => (
+                "127.0.0.1",
+                MAIN_SERVER_PORT
+                    .read()
+                    .expect("main server port to be set")
+                    .expect("main server port to be set"),
+            ),
+        };
+        // pick the upstream peer here,
+        // either we forward to the service on it's blue green port or we send the request to one of the supporting services.
+        Ok(Box::new(HttpPeer::new(
+            address,
+            false,
+            "wut put here?".to_string(),
+        )))
+    }
+}
 
 /*
  the vps runner runs on the server that runs the webserver
@@ -43,32 +116,6 @@ pingora reverse proxy (we're planning on running our server behind cloudflared a
     provide a leptos specific library to get error tracking and monitoring without the hassle of the reverse lookup that sentry io requires (from memory location to function names)
     basic geo location stuff
 */
-pub mod github_event;
-pub mod runner;
-
-#[tokio::main]
-async fn main() {
-    // Read the contents of the file into a String
-    let config_contents =
-        std::fs::read_to_string("Config.toml").expect("Config file in crate root.");
-
-    // Deserialize the String into your RunnerConfig struct
-    let config: RunnerConfigDeserialize =
-        toml::from_str(&config_contents).expect("Config.toml to be valid toml");
-    let config = RunnerConfig::new(config);
-    let runner_state = runner::RunnerState {
-        config,
-        client: std::sync::Arc::new(runner::HttpClient(reqwest::Client::new())),
-    };
-    runner::runner_with_init(runner_state).await;
-    /*
-       for our reverse proxy we need to run our runner (which is a server)
-       and we need to run our apps and then switch between them when forwarding traffic to our server
-       set the ports for each server manually by setting LEPTOS_ENV port var when running the servers
-    */
-    // requires a service to forward /github requests to port 5000, and a way to switch between ENV_BLUE_PORT for blue server and ENV_GREEN_PORT for green server
-    // so the runner needs to communicate up to the reverse proxy?
-}
 
 /*
 We need

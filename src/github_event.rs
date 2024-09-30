@@ -1,24 +1,15 @@
 // copied from https://github.com/daaku/axum-github-webhook-extract/tree/main
 use axum::async_trait;
 use axum::body::Bytes;
-use axum::extract::{FromRef, FromRequest, Request};
+use axum::extract::{FromRequest, Request};
 use axum::http::StatusCode;
 use hmac_sha256::HMAC;
 use serde::de::DeserializeOwned;
 use std::fmt::Display;
-use std::sync::Arc;
 use subtle::ConstantTimeEq;
 
 use crate::runner::RunnerState;
 
-/// State to provide the Github Token to verify Event signature.
-#[derive(Debug, Clone)]
-pub struct GithubToken(pub Arc<String>);
-impl FromRef<RunnerState> for GithubToken {
-    fn from_ref(state: &RunnerState) -> GithubToken {
-        GithubToken(state.config.github_token.clone())
-    }
-}
 /// Verify and extract Github Event Payload.
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use]
@@ -29,16 +20,13 @@ fn err(m: impl Display) -> (StatusCode, String) {
 }
 
 #[async_trait]
-impl<T, S> FromRequest<S> for GithubEvent<T>
+impl<T> FromRequest<RunnerState> for GithubEvent<T>
 where
-    GithubToken: FromRef<S>,
     T: DeserializeOwned,
-    S: Send + Sync,
 {
     type Rejection = (StatusCode, String);
 
-    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let token = GithubToken::from_ref(state);
+    async fn from_request(req: Request, state: &RunnerState) -> Result<Self, Self::Rejection> {
         let signature_sha256 = req
             .headers()
             .get("X-Hub-Signature-256")
@@ -50,7 +38,8 @@ where
         let body = Bytes::from_request(req, state)
             .await
             .map_err(|_| err("error reading body"))?;
-        let mac = HMAC::mac(&body, token.0.as_bytes());
+        let token = state.config.as_ref().github_token.as_bytes();
+        let mac = HMAC::mac(&body, token);
         if mac.ct_ne(&signature).into() {
             return Err(err("signature mismatch"));
         }
@@ -71,10 +60,11 @@ mod tests {
     use axum::Router;
     use http_body_util::BodyExt;
     use serde::Deserialize;
-    use std::sync::Arc;
     use tower::ServiceExt;
 
-    use super::{GithubEvent, GithubToken};
+    use crate::runner::{MockHttpClient, RunnerConfig, RunnerState};
+
+    use super::GithubEvent;
 
     #[derive(Debug, Deserialize)]
     struct Event {
@@ -86,9 +76,12 @@ mod tests {
     }
 
     fn app() -> Router {
+        let mut config = RunnerConfig::new_test();
+        let client = MockHttpClient::new();
+        config.github_token = String::from("42");
         Router::new()
             .route("/", post(echo))
-            .with_state(GithubToken(Arc::new(String::from("42"))))
+            .with_state(RunnerState::new(config, client))
     }
 
     async fn body_string(body: Body) -> String {
