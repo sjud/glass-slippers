@@ -235,10 +235,12 @@ async fn fetch_and_unpack_most_recent_artifact(
 /// Builds the runner, and sends an initial command to begin running the server.
 pub async fn runner_with_init(state: RunnerState) {
     let sender = state.config.fetch_artifact_sender.clone();
+    // delay and send a message to get the ball rolling, this will trigger a fresh artifact run
     spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         sender.send(()).unwrap();
     });
+
     runner(state).await;
 }
 pub async fn fetch_run_green_blue(RunnerState { config, client }: RunnerState) {
@@ -421,10 +423,11 @@ async fn healthcheck(addr: Url) {
                     println!("bad status {:#?}", resp.status())
                 }
             }
-            Err(err) => {} //println!("{err:#?}"),
+            Err(_err) => {} //println!("{_err:#?}"),
         }
     }
 }
+
 #[cfg(test)]
 pub mod tests {
     use std::collections::HashMap;
@@ -513,8 +516,6 @@ pub mod tests {
             })
             .await;
         });
-        let blue_addr = Url::from_str("http://127.0.0.1:3000").unwrap();
-        let green_addr = Url::from_str("http://127.0.0.1:3001").unwrap();
 
         // our init value starts as seen so send a new value to get the ball rolling.
         sender.send(()).unwrap();

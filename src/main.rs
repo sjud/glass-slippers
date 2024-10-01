@@ -1,3 +1,15 @@
+/*
+    TODO
+    X Runner
+    X Proxy
+    Auth
+    CRM
+    Migrations
+    Metrics
+    Tracing
+    Tracking
+    Dashboard
+*/
 use glass_slippers::{
     runner::{self, RunnerConfig, RunnerConfigDeserialize},
     MAIN_SERVER_PORT,
@@ -12,7 +24,7 @@ use pingora::{
 use tokio::sync::watch::Receiver;
 fn main() {
     let mut proxy = pingora::proxy::http_proxy_service(&Arc::new(ServerConf::default()), Proxy {});
-    let mut runner_bg = background_service("runner", RunnerBackgroundService);
+    let runner_bg = background_service("runner", RunnerBackgroundService);
     proxy.add_tcp("127.0.0.1:8000");
     let mut my_server = pingora::server::Server::new(None).unwrap();
     //my_server.bootstrap();
@@ -49,7 +61,7 @@ impl pingora::prelude::ProxyHttp for Proxy {
     async fn upstream_peer(
         &self,
         session: &mut pingora::prelude::Session,
-        ctx: &mut Self::CTX,
+        _ctx: &mut Self::CTX,
     ) -> pingora::Result<Box<HttpPeer>> {
         let parts = session.req_header().as_ref();
         let leading = parts.uri.path().split("/").next().unwrap_or_default();
