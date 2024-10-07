@@ -50,8 +50,6 @@ pub fn App() -> impl IntoView {
 /// Renders the home page of your application.
 #[component]
 fn HomePage() -> impl IntoView {
-    #[cfg(feature = "ssr")]
-    tracing::event!(tracing::Level::ERROR, "Hello while doing SSR.");
     // Creates a reactive value to update the button
     let count = RwSignal::new(0);
     let action = ServerAction::<ClickMe>::new();
@@ -69,6 +67,10 @@ fn HomePage() -> impl IntoView {
 #[server]
 #[cfg_attr(feature = "ssr", tracing::instrument)]
 pub async fn click_me(count: usize) -> Result<usize, ServerFnError> {
-    tracing::event!(tracing::Level::TRACE, "Hello from click_me");
-    Ok(count + 1)
+    #[tracing::instrument]
+    pub async fn click_me_inner(count: usize) -> Result<usize, ServerFnError> {
+        Ok(count + 1)
+    }
+
+    click_me_inner(count).await
 }

@@ -176,7 +176,6 @@ fn run_blue_green(
     let path = format!("{}/{}", working_dir, app_name);
     println!("Running {}", path);
     let mut child = Command::new(path).current_dir(working_dir).spawn().unwrap();
-    // TODO we can pipe the traces back to us and forward them to our observability service
     let pid = Pid::from_raw(child.id().expect("valid id here") as i32);
     spawn(async move {
         child.wait().await.unwrap();

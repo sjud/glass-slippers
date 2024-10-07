@@ -1,5 +1,5 @@
 [package]
-name = "dev-example"
+name = "tracing-ui"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,47 +7,50 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-axum = { version = "0.7", optional = true }
+axum = { version = "0.7", optional = true, features = ["macros"] }
 console_error_panic_hook = "0.1"
 leptos = { version = "0.7.0-beta" }
 leptos_axum = { version = "0.7.0-beta", optional = true }
 leptos_meta = { version = "0.7.0-beta" }
 leptos_router = { version = "0.7.0-beta" }
-tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
-tower = { version = "0.4", features = ["util"], optional = true }
-tower-http = { version = "0.5.2", features = [
-    "request-id",
-    "trace",
-    "util",
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "net",
 ], optional = true }
+tower = { version = "0.4", optional = true }
+tower-http = { version = "0.5", features = ["fs"], optional = true }
 wasm-bindgen = "=0.2.93"
 thiserror = "1"
 tracing = { version = "0.1", optional = true }
-tracing-subscriber = { version = "0.3", optional = true, features = ["json"] }
 http = "1"
-lazy_static = "1.5.0"
-uuid = { version = "1.10.0", features = ["v4"], optional = true }
-reqwest = { version = "0.12.8", optional = true, features = ["json"] }
+serde = "1.0.210"
+sqlx = { version = "0.8.2", optional = true, features = ["sqlite"] }
+chrono = { version = "0.4.38", features = ["js-sys", "serde"] }
+serde_json = { version = "1.0.128", optional = true }
+clickhouse = { version = "0.13.0", optional = true, features = ["uuid"] }
+serde_repr = "0.1.19"
+uuid = { version = "1.10.0", features = ["js", "v4", "serde"] }
+
+[dev-dependencies]
+serial_test = "0.5"
 
 [features]
-default = ["ssr"]
-hydrate = ["leptos/hydrate"]
 ssr = [
-    "dep:reqwest",
+    "dep:clickhouse",
+    "dep:serde_json",
     "dep:axum",
     "dep:tokio",
     "dep:tower",
     "dep:tower-http",
-    "dep:uuid",
     "dep:leptos_axum",
     "leptos/ssr",
     "leptos_meta/ssr",
     "leptos_router/ssr",
     "dep:tracing",
-    "dep:tracing-subscriber",
+    "dep:sqlx",
 ]
-[profile.release]
-debug = true
+default = ["ssr"]
+hydrate = ["leptos/hydrate"]
 
 # Defines a size-optimized profile for the WASM bundle in release mode
 [profile.wasm-release]
@@ -58,8 +61,11 @@ codegen-units = 1
 panic = "abort"
 
 [package.metadata.leptos]
+
+tailwind-input-file = "style/tailwind.css"
+
 # The name used by wasm-bindgen/cargo-leptos for the JS/WASM bundle. Defaults to the crate name
-output-name = "dev-example"
+output-name = "tracing-ui"
 
 # The site root folder is where cargo-leptos generate all output. WARNING: all content of this folder will be erased on a rebuild. Use it in your server setup.
 site-root = "target/site"
@@ -68,8 +74,7 @@ site-root = "target/site"
 # Defaults to pkg
 site-pkg-dir = "pkg"
 
-# [Optional] The source CSS file. If it ends with .sass or .scss then it will be compiled by dart-sass into CSS. The CSS is optimized by Lightning CSS before being written to <site-root>/<site-pkg>/app.css
-style-file = "style/main.scss"
+
 # Assets source dir. All files found here will be copied and synchronized to site-root.
 # The assets-dir cannot have a sub directory with the same name/path as site-pkg-dir.
 #
@@ -77,10 +82,10 @@ style-file = "style/main.scss"
 assets-dir = "public"
 
 # The IP and port (ex: 127.0.0.1:3000) where the server serves the content. Use it in your server setup.
-site-addr = "127.0.0.1:3000"
+site-addr = "127.0.0.1:3006"
 
 # The port to use for automatic reload monitoring
-reload-port = 3001
+reload-port = 3007
 
 # [Optional] Command to use when running end2end tests. It will run in the end2end dir.
 #   [Windows] for non-WSL use "npx.cmd playwright test"

@@ -52,6 +52,11 @@ impl BackgroundService for RunnerBackgroundService {
         runner::runner_with_init(runner_state).await;
     }
 }
+pub struct ObservabilityBackgroundService;
+#[async_trait::async_trait]
+impl BackgroundService for ObservabilityBackgroundService {
+    async fn start(&self, _: Receiver<bool>) {}
+}
 
 pub struct Proxy;
 #[async_trait::async_trait]

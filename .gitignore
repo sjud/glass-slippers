@@ -1,5 +1,6 @@
 /target
 /examples/*/target
+/examples/*/node_modules
 Config.toml
 /unzipped
 /zips
