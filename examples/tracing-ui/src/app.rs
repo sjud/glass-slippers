@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 #[cfg(feature = "ssr")]
 use crate::{clickhouse_client, TraceDigested};
+use chrono::DateTime;
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
@@ -54,6 +55,7 @@ pub fn App() -> impl IntoView {
 #[component]
 fn HomePage() -> impl IntoView {
     let resource = Resource::new(|| (), |_| list_requests());
+    // TODO get sessions and then get requests per session.
     view! {
         <Suspense fallback=move || view! { <p>"Loading (Suspense Fallback)..."</p> }>
         // or you can use `Suspend` to read resources asynchronously
@@ -70,7 +72,7 @@ fn HomePage() -> impl IntoView {
 #[server]
 pub async fn list_requests() -> Result<Vec<SpanTree>, ServerFnError> {
     let client = clickhouse_client().await?;
-    let traces = client.get_by_session_id(0).await?;
+    let traces = client.get_traces_with_limit(100).await?;
     let mut grouped: HashMap<u64, Vec<TraceDigested>> = HashMap::new();
 
     for item in traces {
@@ -85,7 +87,7 @@ pub async fn list_requests() -> Result<Vec<SpanTree>, ServerFnError> {
 #[cfg(feature = "ssr")]
 impl From<Vec<TraceDigested>> for SpanTree {
     fn from(value: Vec<TraceDigested>) -> Self {
-        println!("{value:#?}");
+        println!("value {value:#?}");
         // split up spans and events.
         let mut events = Vec::new();
         let mut spans = Vec::new();
@@ -100,16 +102,17 @@ impl From<Vec<TraceDigested>> for SpanTree {
         let mut span_trees = spans
             .clone()
             .into_iter()
-            .map(|root| {
+            .map(|span| {
                 (
-                    root.name.clone(),
+                    span.name.clone(),
                     SpanTree {
-                        root,
+                        span,
                         ..Default::default()
                     },
                 )
             })
             .collect::<HashMap<String, SpanTree>>();
+        println!("span_trees: {span_trees:#?}");
         // assign events to each spantree.
         for event in events {
             let span_tree = span_trees.get_mut(&event.current_span).unwrap();
@@ -146,9 +149,9 @@ pub fn build_tree_backwards(
         // remove the childless spantree from the span_trees map
         let span_tree = span_trees
             .remove(&span.name)
-            .expect("all spans in span tree");
+            .expect(&format!("{} not found in span_trees", span.name));
         // return root, if is root then parent = root. lol
-        if span_tree.root.parent == "root" {
+        if span_tree.span.parent == "root" {
             return span_tree;
         }
         // get a mutable reference to the parent of the childless tree
@@ -202,7 +205,7 @@ pub struct SpanUiData {
 }
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct SpanTree {
-    pub root: SpanUiData,
+    pub span: SpanUiData,
     pub children: Vec<SpanTree>,
     pub events: Vec<EventUiData>,
 }
@@ -230,7 +233,7 @@ impl UiTraceLevel {
 #[component]
 pub fn SpanTreeComponent(span_tree: SpanTree) -> impl IntoView {
     let SpanTree {
-        root:
+        span:
             SpanUiData {
                 name,
                 parent,
@@ -259,13 +262,14 @@ pub fn SpanTreeComponent(span_tree: SpanTree) -> impl IntoView {
         <div class=format!("{}", level.bg_color())>
             <p class="font-bold">{name}</p>
             {values}
-           {events}
+            {events}
             {children}
         </div>
     </div>
     }
     .into_view()
 }
+
 #[component]
 pub fn Event(event: EventUiData) -> impl IntoView {
     let EventUiData {
@@ -279,8 +283,10 @@ pub fn Event(event: EventUiData) -> impl IntoView {
         .into_iter()
         .map(|v| view! { <p>{format!("{} : {}", v.0, v.1)}</p> })
         .collect::<Vec<_>>();
+    let datetime = DateTime::from_timestamp(timestamp as i64, 0).unwrap();
     view! {
         <div class=format!("{}", level.bg_color())>
+            <div>{format!("request_id {request_id} event_time {datetime}")}</div>
             {values}
         </div>
     }
@@ -288,139 +294,141 @@ pub fn Event(event: EventUiData) -> impl IntoView {
 
 #[cfg(test)]
 pub mod tests {
+    use crate::DigestedLevel;
+
     use super::*;
     use uuid::Uuid;
     #[tokio::test]
     pub async fn list_requests() {
         let traces = vec![
             TraceDigested {
-                session_id: 0,
+                browser_session_id: 0,
                 request_id: 0,
                 timestamp: 1728340478,
                 auth_id: Uuid::nil(),
                 target: "dev_example".to_string(),
-                name: "http_request".to_string(),
-                parent: "root".to_string(),
+                span_name: "http_request".to_string(),
+                span_parent: "root".to_string(),
                 level: DigestedLevel::INFO,
                 current_span: "INFO".to_string(),
                 fields: vec![("message".to_string(), "new".to_string())],
             },
             TraceDigested {
-                session_id: 0,
+                browser_session_id: 0,
                 request_id: 1,
                 timestamp: 1728340478,
                 auth_id: Uuid::nil(),
                 target: "dev_example".to_string(),
-                name: "http_request".to_string(),
-                parent: "root".to_string(),
+                span_name: "http_request".to_string(),
+                span_parent: "root".to_string(),
                 level: DigestedLevel::INFO,
                 current_span: "INFO".to_string(),
                 fields: vec![("message".to_string(), "new".to_string())],
             },
             TraceDigested {
-                session_id: 0,
+                browser_session_id: 0,
                 request_id: 2,
                 timestamp: 1728340478,
                 auth_id: Uuid::nil(),
                 target: "dev_example".to_string(),
-                name: "http_request".to_string(),
-                parent: "root".to_string(),
+                span_name: "http_request".to_string(),
+                span_parent: "root".to_string(),
                 level: DigestedLevel::INFO,
                 current_span: "INFO".to_string(),
                 fields: vec![("message".to_string(), "new".to_string())],
             },
             TraceDigested {
-                session_id: 0,
+                browser_session_id: 0,
                 request_id: 3,
                 timestamp: 1728340478,
                 auth_id: Uuid::nil(),
                 target: "dev_example".to_string(),
-                name: "http_request".to_string(),
-                parent: "root".to_string(),
+                span_name: "http_request".to_string(),
+                span_parent: "root".to_string(),
                 level: DigestedLevel::INFO,
                 current_span: "INFO".to_string(),
                 fields: vec![("message".to_string(), "new".to_string())],
             },
             TraceDigested {
-                session_id: 0,
+                browser_session_id: 0,
                 request_id: 4,
                 timestamp: 1728340478,
                 auth_id: Uuid::nil(),
                 target: "dev_example".to_string(),
-                name: "http_request".to_string(),
-                parent: "root".to_string(),
+                span_name: "http_request".to_string(),
+                span_parent: "root".to_string(),
                 level: DigestedLevel::INFO,
                 current_span: "INFO".to_string(),
                 fields: vec![("message".to_string(), "new".to_string())],
             },
             TraceDigested {
-                session_id: 0,
+                browser_session_id: 0,
                 request_id: 5,
                 timestamp: 1728340482,
                 auth_id: Uuid::nil(),
                 target: "dev_example".to_string(),
-                name: "http_request".to_string(),
-                parent: "root".to_string(),
+                span_name: "http_request".to_string(),
+                span_parent: "root".to_string(),
                 level: DigestedLevel::INFO,
                 current_span: "INFO".to_string(),
                 fields: vec![("message".to_string(), "new".to_string())],
             },
             TraceDigested {
-                session_id: 0,
+                browser_session_id: 0,
                 request_id: 5,
                 timestamp: 1728340482,
                 auth_id: Uuid::nil(),
                 target: "dev_example::app".to_string(),
-                name: "__click_me".to_string(),
-                parent: "\"http_request\"".to_string(),
+                span_name: "__click_me".to_string(),
+                span_parent: "\"http_request\"".to_string(),
                 level: DigestedLevel::INFO,
                 current_span: "INFO".to_string(),
                 fields: vec![("message".to_string(), "new".to_string())],
             },
             TraceDigested {
-                session_id: 0,
+                browser_session_id: 0,
                 request_id: 5,
                 timestamp: 1728340482,
                 auth_id: Uuid::nil(),
                 target: "dev_example::app".to_string(),
-                name: "click_me_inner".to_string(),
-                parent: "\"__click_me\"".to_string(),
+                span_name: "click_me_inner".to_string(),
+                span_parent: "\"__click_me\"".to_string(),
                 level: DigestedLevel::INFO,
                 current_span: "INFO".to_string(),
                 fields: vec![("message".to_string(), "new".to_string())],
             },
             TraceDigested {
-                session_id: 0,
+                browser_session_id: 0,
                 request_id: 6,
                 timestamp: 1728340483,
                 auth_id: Uuid::nil(),
                 target: "dev_example".to_string(),
-                name: "http_request".to_string(),
-                parent: "root".to_string(),
+                span_name: "http_request".to_string(),
+                span_parent: "root".to_string(),
                 level: DigestedLevel::INFO,
                 current_span: "INFO".to_string(),
                 fields: vec![("message".to_string(), "new".to_string())],
             },
             TraceDigested {
-                session_id: 0,
+                browser_session_id: 0,
                 request_id: 6,
                 timestamp: 1728340483,
                 auth_id: Uuid::nil(),
                 target: "dev_example::app".to_string(),
-                name: "__click_me".to_string(),
-                parent: "\"http_request\"".to_string(),
+                span_name: "__click_me".to_string(),
+                span_parent: "\"http_request\"".to_string(),
                 level: DigestedLevel::INFO,
                 current_span: "INFO".to_string(),
                 fields: vec![("message".to_string(), "new".to_string())],
             },
             TraceDigested {
-                session_id: 0,
+                browser_session_id: 0,
                 request_id: 6,
                 timestamp: 1728340483,
                 auth_id: Uuid::nil(),
                 target: "dev_example::app".to_string(),
-                name: "click_me_inner".to_string(),
-                parent: "\"__click_me\"".to_string(),
+                span_name: "click_me_inner".to_string(),
+                span_parent: "\"__click_me\"".to_string(),
                 level: DigestedLevel::INFO,
                 current_span: "INFO".to_string(),
                 fields: vec![("message".to_string(), "new".to_string())],

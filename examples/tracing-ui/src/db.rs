@@ -26,22 +26,32 @@ pub enum UndigestedLevel {
 }
 #[derive(Serialize, Deserialize, Clone, Debug, Row, Default)]
 pub struct TraceDigested {
-    pub session_id: u64,
+    /// all traces are associated with a request
     pub request_id: u64,
+    /// timestamp when request initiated
     pub timestamp: u64,
+    /// all requests are associated with a particular browser session
+    pub browser_session_id: u128,
+    /// if there is a user associated with the request it will be here
     #[serde(with = "clickhouse::serde::uuid")]
     pub auth_id: Uuid,
+    /// the path to where the event occurred.
     pub target: String,
-    pub name: String,
-    pub parent: String,
+    /// if the trace is a span it will have a span_aname
+    pub span_name: String,
+    /// if the trace is a span it will have a span_parent
+    pub span_parent: String,
+    /// i,e TRACE, DEBUG, INFO, WARN, ERROR
     pub level: DigestedLevel,
+    /// If the trace is an event instead of a span_parent it will have a current_span, which is where the event was emitted
     pub current_span: String,
+    /// All traces, spans and events can have fields. Spans will have a field with a message = "new"
     pub fields: Vec<(String, String)>,
 }
 
 impl TraceDigested {
     pub fn is_span(&self) -> bool {
-        !self.name.is_empty()
+        !self.span_name.is_empty()
     }
 
     pub fn in_span(&self, span_name: &String) -> bool {
@@ -52,8 +62,8 @@ impl TraceDigested {
 impl From<TraceDigested> for SpanUiData {
     fn from(value: TraceDigested) -> Self {
         Self {
-            name: value.name,
-            parent: value.parent,
+            name: value.span_name,
+            parent: value.span_parent,
             level: UiTraceLevel::from(value.level),
             fields: value.fields,
             request_id: value.request_id,
@@ -118,19 +128,19 @@ impl ClickhouseClient {
                 r#"
             CREATE TABLE IF NOT EXISTS traces
             (
-                session_id UInt64,
                 request_id UInt64,
                 timestamp UInt64,
                 auth_id UUID,
+                browser_session_id UInt128,
                 target LowCardinality(String),
-                name LowCardinality(String),
-                parent LowCardinality(String),
+                span_name LowCardinality(String),
+                span_parent LowCardinality(String),
                 level Enum8('TRACE' = 1, 'DEBUG' = 2, 'INFO' = 3, 'WARN' = 4, 'ERROR' = 5),
                 current_span LowCardinality(String),
                 fields Array(Tuple(name LowCardinality(String),value String))
             )
             ENGINE = MergeTree()
-            ORDER BY (session_id, request_id, timestamp);
+            ORDER BY (request_id, timestamp);
         "#,
             )
             .execute()
@@ -144,20 +154,25 @@ impl ClickhouseClient {
         Ok(())
     }
     /// When your server boots up, query get last request id and add 1 to find the first number for your request id middleware.
-    pub async fn get_last_request_session_id(&self) -> Result<(u64, u64)> {
+    pub async fn get_last_request_id(&self) -> Result<u64> {
         self.0
             .query(
                 r#"
             SELECT 
-                COALESCE(MAX(request_id), 0) AS last_request_id, 
-                COALESCE(MAX(session_id), 0) AS last_session_id
+                COALESCE(MAX(request_id), 0) AS last_request_id
             FROM traces
             "#,
             )
-            .fetch_one::<(u64, u64)>()
+            .fetch_one::<u64>()
             .await
     }
-
+    pub async fn get_traces_with_limit(&self, limit: u64) -> Result<Vec<TraceDigested>> {
+        self.0
+            .query(r#"SELECT * FROM traces LIMIT ?"#)
+            .bind(limit)
+            .fetch_all()
+            .await
+    }
     pub async fn get_by_session_id(&self, session_id: u64) -> Result<Vec<TraceDigested>> {
         self.0
             .query(r#"SELECT * FROM traces WHERE session_id = ?"#)
@@ -173,7 +188,7 @@ pub fn digest_trace(mut trace: TraceUndigested) -> TraceDigested {
     } else {
         false
     };
-    let parent = if is_span {
+    let span_parent = if is_span {
         // the parent of the span is the name of the last span in its spans.
         if let Some(parent_span) = trace.spans.last() {
             parent_span
@@ -217,7 +232,7 @@ pub fn digest_trace(mut trace: TraceUndigested) -> TraceDigested {
     } else {
         "".to_string()
     };
-    let name = if is_span {
+    let span_name = if is_span {
         trace
             .span
             .remove("name")
@@ -244,6 +259,25 @@ pub fn digest_trace(mut trace: TraceUndigested) -> TraceDigested {
     }
     .as_i64()
     .unwrap() as u64;
+    let browser_session_id = {
+        if let Some(map) = spans.get("http_request") {
+            map.get("browser_session_id")
+                .expect("map for http_request to contain request_id")
+        } else {
+            // if there is no http request in spans, we are looking at the new span event for the http request itself
+            trace
+                .span
+                .get("browser_session_id")
+                .expect("http request to have request_id as value")
+        }
+    }
+    .as_str()
+    .unwrap()
+    .to_string()
+    .parse::<u128>()
+    // the client can set the browser-session-id so this is a potential vulnerability if we treat it as trusted input.
+    // this is as opposed to the request id which we full control over.
+    .unwrap_or_default();
     let timestamp = trace.timestamp.timestamp() as u64;
     let map_value_to_string = |(name, value)| -> (String, String) {
         (
@@ -273,28 +307,18 @@ pub fn digest_trace(mut trace: TraceUndigested) -> TraceDigested {
         );
     }
     TraceDigested {
-        session_id: 0,
         request_id,
         timestamp,
+        browser_session_id,
         auth_id: Uuid::default(),
         target,
-        name,
-        parent,
+        span_name,
+        span_parent,
         level: DigestedLevel::from(trace.level),
         current_span,
         fields,
     }
 }
-/*
-{"timestamp":"2024-10-07T16:57:54.042115Z","level":"INFO",
-"fields":{"is_special":true},
-"target":"dev_example::app",
-"span":{"count":0,"name":"__click_me"},
-"spans":[{"request_id":"\"809f1a3b-dc26-4567-984e-c0586c453b5b\"","name":"http_request"},{"count":0,"name":"__click_me"}]}
-
-
-{"timestamp":"2024-10-07T17:46:14.504229Z","level":"INFO","fields":{"message":"new"},"target":"dev_example::app","span":{"count":0,"name":"click_me_inner"},"spans":[{"request_id":"\"ca4fd0f2-b400-4876-b603-f251d08b8d53\"","name":"http_request"},{"count":0,"name":"__click_me"}]}
-*/
 
 #[cfg(test)]
 pub mod tests {
@@ -310,8 +334,8 @@ pub mod tests {
     #[serial]
     pub async fn get_ids() {
         let client = ClickhouseClient::new().await.unwrap();
-        let result = client.get_last_request_session_id().await.unwrap();
-        assert_eq!(result, (0, 0));
+        let result = client.get_last_request_id().await.unwrap();
+        assert_eq!(result, 0);
         client
             .insert_trace(TraceDigested {
                 request_id: 100,
@@ -319,15 +343,8 @@ pub mod tests {
             })
             .await
             .unwrap();
-        client
-            .insert_trace(TraceDigested {
-                session_id: 100,
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        let result = client.get_last_request_session_id().await.unwrap();
-        assert_eq!((100, 100), result);
+        let result = client.get_last_request_id().await.unwrap();
+        assert_eq!(100, result);
     }
 
     #[tokio::test]

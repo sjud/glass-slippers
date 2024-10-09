@@ -22,23 +22,30 @@ tower-http = { version = "0.5.2", features = [
 ], optional = true }
 wasm-bindgen = "=0.2.93"
 thiserror = "1"
-tracing = { version = "0.1", optional = true }
+tracing = { version = "0.1.40", optional = true }
 tracing-subscriber = { version = "0.3", optional = true, features = ["json"] }
 http = "1"
 lazy_static = "1.5.0"
-uuid = { version = "1.10.0", features = ["v4"], optional = true }
+uuid = { version = "1.10.0", features = ["v4", "js"] }
 reqwest = { version = "0.12.8", optional = true, features = ["json"] }
+axum-extra = { version = "0.9.4", features = ["cookie"], optional = true }
+http-body = { version = "1.0.1", optional = true }
+pin-project-lite = { version = "0.2.14", optional = true }
+cfg-if = "1.0.0"
+web-sys = { version = "0.3.70", optional = true, features = ["HtmlDocument"] }
 
 [features]
 default = ["ssr"]
-hydrate = ["leptos/hydrate"]
+hydrate = ["leptos/hydrate", "dep:web-sys"]
 ssr = [
+    "dep:pin-project-lite",
+    "dep:http-body",
+    "dep:axum-extra",
     "dep:reqwest",
     "dep:axum",
     "dep:tokio",
     "dep:tower",
     "dep:tower-http",
-    "dep:uuid",
     "dep:leptos_axum",
     "leptos/ssr",
     "leptos_meta/ssr",

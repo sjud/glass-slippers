@@ -8,7 +8,7 @@ async fn main() {
     };
 
     use axum::Router;
-    use dev_example::app::*;
+    use dev_example::{app::*, browser_session_id::BrowserSessionIdLayer};
     use http::Request;
     use leptos::prelude::*;
     use leptos_axum::{generate_route_list, LeptosRoutes};
@@ -16,9 +16,10 @@ async fn main() {
     use request_id::MyMakeRequestId;
     use tower::ServiceBuilder;
 
-    use tower_http::{request_id::MakeRequestUuid, trace::TraceLayer, ServiceBuilderExt};
+    use tower_http::{trace::TraceLayer, ServiceBuilderExt};
     use tracing::info_span;
     use tracing_subscriber::fmt::format::FmtSpan;
+    use uuid::Uuid;
 
     let unix_stream = UnixStream::connect("/tmp/glass_slippers_main_server_tracing.sock").unwrap();
     let stdout = std::io::stdout();
@@ -50,33 +51,60 @@ async fn main() {
     // Generate the list of routes in your Leptos App
     let routes = generate_route_list(App);
 
-    let (session_id, request_id) = reqwest::Client::new()
-        .get("http:127.0.0.1:3006/api/next_request_id_session_id")
+    let request_id = reqwest::Client::new()
+        .get("http:127.0.0.1:3006/api/next_request_id")
         .send()
         .await
         .unwrap()
         .error_for_status()
         .unwrap()
-        .json::<(u64, u64)>()
+        .json::<u64>()
         .await
         .unwrap();
 
     let middleware = ServiceBuilder::new()
         .set_x_request_id(MyMakeRequestId::new(request_id))
+        .layer(BrowserSessionIdLayer)
         .layer(
             TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
+                let browser_session_id = request.headers().get("x-browser-session-id");
                 // Log the request id as generated.
                 let request_id = request.headers().get("x-request-id");
-                match request_id {
-                    Some(request_id) => info_span!(
+                let path_and_query = request
+                    .uri()
+                    .path_and_query()
+                    .map(|p| format!("{p:#?}"))
+                    .unwrap_or_default();
+                match (request_id, browser_session_id) {
+                    (Some(request_id), Some(browser_session_id)) => info_span!(
                         "http_request",
+                        browser_session_id = browser_session_id
+                            .to_str()
+                            .unwrap_or_default()
+                            .parse::<Uuid>()
+                            .unwrap_or_default()
+                            .as_u128(),
                         request_id = request_id
                             .to_str()
                             .unwrap_or_default()
                             .parse::<u64>()
                             .unwrap_or_default(),
+                        path_and_query = path_and_query
                     ),
-                    None => {
+                    (Some(request_id), None) => {
+                        error!("could not extract session_id");
+                        info_span!(
+                            "http_request",
+                            session_id = 0,
+                            request_id = request_id
+                                .to_str()
+                                .unwrap_or_default()
+                                .parse::<u64>()
+                                .unwrap_or_default(),
+                            path_and_query = path_and_query
+                        )
+                    }
+                    (None, _) => {
                         error!("could not extract request_id");
                         info_span!("http_request")
                     }
@@ -105,15 +133,13 @@ async fn main() {
 
 #[cfg(feature = "ssr")]
 pub mod request_id {
+    use http::Request;
     use std::sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     };
-
-    use http::Request;
     use tower_http::request_id::{MakeRequestId, RequestId};
 
-    use super::*;
     #[derive(Clone)]
     pub struct MyMakeRequestId {
         counter: Arc<AtomicU64>,
@@ -126,7 +152,7 @@ pub mod request_id {
         }
     }
     impl MakeRequestId for MyMakeRequestId {
-        fn make_request_id<B>(&mut self, request: &Request<B>) -> Option<RequestId> {
+        fn make_request_id<B>(&mut self, _: &Request<B>) -> Option<RequestId> {
             let request_id = self
                 .counter
                 .fetch_add(1, Ordering::SeqCst)

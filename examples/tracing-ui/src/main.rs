@@ -4,7 +4,7 @@ async fn main() {
     use axum::{extract::Extension, routing::get, Router};
     use leptos::prelude::*;
     use leptos_axum::{generate_route_list, LeptosRoutes};
-    use server::next_request_id_session_id;
+    use server::next_request_id;
     use tracing_ui::app::*;
     use tracing_ui::db::ClickhouseClient;
 
@@ -20,10 +20,7 @@ async fn main() {
             let leptos_options = leptos_options.clone();
             move || shell(leptos_options.clone())
         })
-        .route(
-            "/api/next_request_id_session_id",
-            get(next_request_id_session_id),
-        )
+        .route("/api/next_request_id", get(next_request_id))
         .fallback(leptos_axum::file_and_error_handler(shell))
         .with_state(leptos_options)
         .layer(Extension(clickhouse_client.clone()));
@@ -55,10 +52,10 @@ pub mod server {
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::net::{UnixListener, UnixStream};
 
-    pub async fn next_request_id_session_id(
+    pub async fn next_request_id(
         Extension(client): Extension<ClickhouseClient>,
     ) -> impl IntoResponse {
-        let body = client.get_last_request_session_id().await.unwrap();
+        let body = client.get_last_request_id().await.unwrap();
         (StatusCode::OK, serde_json::to_string(&body).unwrap())
     }
 
@@ -67,7 +64,8 @@ pub mod server {
     /// Sets up an IPC socket to ingest data from the reverse proxy.
     pub async fn ingest_main_server_traces(client: ClickhouseClient) {
         let socket_path = "/tmp/glass_slippers_main_server_tracing.sock";
-        remove_file(socket_path).await.unwrap();
+        // ignore errors, if file doesnt exist then we're good.
+        _ = remove_file(socket_path).await;
         let listener = UnixListener::bind(socket_path).unwrap();
         println!("Listening on {}", socket_path);
         // Asynchronously accept an incoming connection
