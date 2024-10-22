@@ -1,8 +1,8 @@
-use crate::{github_event::GithubEvent, MAIN_SERVER_PORT};
 use axum::{
     async_trait, extract::State, http::StatusCode, response::IntoResponse, routing::post, Router,
 };
 use bytes::Bytes;
+use github_event::GithubEvent;
 use nix::{
     sys::signal::{self, Signal},
     unistd::Pid,
@@ -12,11 +12,12 @@ use serde::Deserialize;
 use std::{
     fs::read_dir,
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 use tempfile::{tempfile, TempDir};
 use tokio::{process::Command, spawn};
-
+pub mod github_event;
+pub static MAIN_SERVER_PORT: RwLock<Option<u16>> = RwLock::new(None);
 #[derive(Clone, Deserialize, Debug)]
 pub struct RunnerConfigDeserialize {
     /// this is used to confirm the webhook signature
@@ -269,7 +270,6 @@ pub async fn fetch_run_green_blue(RunnerState { config, client }: RunnerState) {
                 if std::fs::metadata("app_blue").unwrap().modified().unwrap()
                     > std::fs::metadata("app_green").unwrap().modified().unwrap()
                 {
-                    println!("blue has been modified more recently write into green");
                     fetch_and_unpack_most_recent_artifact(
                         client,
                         github_api_key.as_ref(),
@@ -287,7 +287,6 @@ pub async fn fetch_run_green_blue(RunnerState { config, client }: RunnerState) {
                         false,
                     );
                 } else {
-                    println!("green has been modified more recently write into blue");
                     fetch_and_unpack_most_recent_artifact(
                         client,
                         github_api_key.as_ref(),
@@ -306,7 +305,6 @@ pub async fn fetch_run_green_blue(RunnerState { config, client }: RunnerState) {
                     );
                 }
             } else {
-                println!("blue is not empty and green is empty, write into green");
                 fetch_and_unpack_most_recent_artifact(
                     client,
                     github_api_key.as_ref(),
@@ -325,7 +323,6 @@ pub async fn fetch_run_green_blue(RunnerState { config, client }: RunnerState) {
                 );
             }
         } else {
-            println!("blue is empty write into blue");
             fetch_and_unpack_most_recent_artifact(
                 client,
                 github_api_key.as_ref(),
@@ -496,7 +493,6 @@ pub mod tests {
             .expect_list_artifacts()
             .returning(|_| vec![Artifact::default()]);
         let mut buf = Vec::new();
-        println!("Current working directory: {:?}", std::env::current_dir());
         _ = std::fs::File::open("test_data/app-tar.zip")
             .expect("Run test in crate root.")
             .read_to_end(&mut buf)

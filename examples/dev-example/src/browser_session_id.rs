@@ -68,7 +68,6 @@ where
         let header_map = req.headers_mut();
         // if map contains id we're done.
         if header_map.contains_key("x-browser-session-id") {
-            println!("we done");
             let fut = self.inner.call(req);
             return BrowserSessionIdFuture {
                 inner: fut,
@@ -102,7 +101,6 @@ where
                 })
                 .next()
             {
-                println!("we got browser_session id from cookie");
                 header_map.insert(
                     "x-browser-session-id",
                     HeaderValue::from_str(browser_session_id)
@@ -115,7 +113,6 @@ where
                     set_browser_session_id: None,
                 }
             } else {
-                println!("we didnt get browser session id from cookie we set cookie");
                 let set_browser_session_id = propagate_cookie(header_map);
                 let fut = self.inner.call(req);
                 BrowserSessionIdFuture {
@@ -124,7 +121,6 @@ where
                 }
             }
         } else {
-            println!("we didn't get cookie, we set cookie");
             let set_browser_session_id = propagate_cookie(header_map);
             let fut = self.inner.call(req);
             BrowserSessionIdFuture {
@@ -148,4 +144,3 @@ impl<S> Layer<S> for BrowserSessionIdLayer {
         BrowserSessionIdService { inner }
     }
 }
-

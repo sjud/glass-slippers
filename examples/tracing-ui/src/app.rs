@@ -87,7 +87,6 @@ pub async fn list_requests() -> Result<Vec<SpanTree>, ServerFnError> {
 #[cfg(feature = "ssr")]
 impl From<Vec<TraceDigested>> for SpanTree {
     fn from(value: Vec<TraceDigested>) -> Self {
-        println!("value {value:#?}");
         // split up spans and events.
         let mut events = Vec::new();
         let mut spans = Vec::new();
@@ -112,7 +111,6 @@ impl From<Vec<TraceDigested>> for SpanTree {
                 )
             })
             .collect::<HashMap<String, SpanTree>>();
-        println!("span_trees: {span_trees:#?}");
         // assign events to each spantree.
         for event in events {
             let span_tree = span_trees.get_mut(&event.current_span).unwrap();

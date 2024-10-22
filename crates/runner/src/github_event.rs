@@ -8,7 +8,7 @@ use serde::de::DeserializeOwned;
 use std::fmt::Display;
 use subtle::ConstantTimeEq;
 
-use crate::runner::RunnerState;
+use crate::RunnerState;
 
 /// Verify and extract Github Event Payload.
 #[derive(Debug, Clone, Copy, Default)]
@@ -62,7 +62,7 @@ mod tests {
     use serde::Deserialize;
     use tower::ServiceExt;
 
-    use crate::runner::{MockHttpClient, RunnerConfig, RunnerState};
+    use crate::{MockHttpClient, RunnerConfig, RunnerState};
 
     use super::GithubEvent;
 

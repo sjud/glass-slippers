@@ -1,11 +1,6 @@
-use axum::{
-    async_trait,
-    body::{Body, Bytes},
-    extract::FromRequestParts,
-};
+use axum::{async_trait, extract::FromRequestParts};
 use http::StatusCode;
 use http_body_util::BodyExt as _;
-use hyper::client::conn::http1::SendRequest;
 /*
     Our Data Model revolves around creating an authentication attempt, which is Identification (who the user is) + our authentication method.
     I.e A password, or a two factor or a single sign on from FANG etc.
@@ -13,20 +8,20 @@ use hyper::client::conn::http1::SendRequest;
     So the Client collects the info, builds the pattern sends it to the server and gets back a result.
 */
 use hyper_util::rt::TokioIo;
+use redis::{FromRedisValue, ToRedisArgs};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{error::Error, ops::Deref, str::FromStr as _};
+use std::{ops::Deref, str::FromStr as _};
 use thiserror::Error as ThisError;
 use tokio::net::UnixStream;
 use uuid::Uuid;
-
-use crate::server::SessionId;
 
 pub type AuthorizationSessionId = Uuid;
 pub type AntiCsrfToken = Uuid;
 pub type VerificationCode = String;
 /// How the sytem will identify the user in the database. We combine Identification with Authentication to find an AuthorizationId match in the database.
 pub type Identification = String;
-
+pub static X_AUTH_ID_HEADER_NAME: &'static str = "x-auth-id";
+pub static ANTI_CSRF_TOKEN_HEADER_NAME: &'static str = "x-anti-csrf-token";
 /// AuthenticationAttempt is given to the AuthenticationClient
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuthenticationAttempt {
@@ -59,7 +54,6 @@ pub struct CreateUnverifiedAuthentication {
     pub identification: Identification,
     pub contact: Contact,
     pub authentication: Authentication,
-    pub anti_csrf_token: Option<AntiCsrfToken>,
 }
 
 impl CreateUnverifiedAuthentication {
@@ -71,16 +65,11 @@ impl CreateUnverifiedAuthentication {
     /// Put all that information in here.
     /// Take CreateAuthenticationAttempt and give that to `AuthenticationClient::create_authentication`
     /// see the docs for `AuthenticationClient::create_authentication` for next steps.
-    pub fn new_browser_email_password<S: AsRef<str>>(
-        email: S,
-        password: S,
-        anti_csrf_token: AntiCsrfToken,
-    ) -> Self {
+    pub fn new_browser_email_password<S: AsRef<str>>(email: S, password: S) -> Self {
         Self {
             identification: email.as_ref().to_string(),
             contact: Contact::Email(email.as_ref().to_string()),
             authentication: Authentication::Password(password.as_ref().to_string()),
-            anti_csrf_token: Some(anti_csrf_token),
         }
     }
     /// This is the method to use if you are using username and password as identification and authentication on the browser.
@@ -96,14 +85,24 @@ impl CreateUnverifiedAuthentication {
         username: S,
         email: S,
         password: S,
-        anti_csrf_token: AntiCsrfToken,
     ) -> Self {
         Self {
             identification: username.as_ref().to_string(),
             contact: Contact::Email(email.as_ref().to_string()),
             authentication: Authentication::Password(password.as_ref().to_string()),
-            anti_csrf_token: Some(anti_csrf_token),
         }
+    }
+    /// Returns (Contact,Username,Password)
+    pub fn unwrap_email_password(self) -> (String, String, String) {
+        (
+            match self.contact {
+                Contact::Email(email) => email,
+            },
+            self.identification,
+            match self.authentication {
+                Authentication::Password(password) => password,
+            },
+        )
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -260,84 +259,13 @@ pub enum VerificationError {
     NotFound,
 }
 
-pub type AuthClientResult<T> = Result<T, AuthClientError>;
-
-#[axum::async_trait]
-pub trait AuthenticationClient {
-    async fn create_anti_csrf_token(
-        &self,
-        session_id: SessionId,
-    ) -> AuthClientResult<AntiCsrfToken>;
-    async fn check_anti_csrf_token(
-        &self,
-        token: AntiCsrfToken,
-        session_id: SessionId,
-    ) -> AuthClientResult<AntiCsrfToken>;
-
-    /// Collect AuthenticationAttempt data from a Login form and give to the authenticate method on the AuthenticationClient.
-    /// It will send it to the system which will attempt to match the data in the attempt with an entry in the database.
-    /// If successful it will produce an AuthorizationSessionId, which is a Uuid that needs to be put into a cookie.
-    /// Later when the user returns, the AuthorizationSessionId will be turned into a x-auth-id header for AuthorizationId
-    /// (AuthorizationId is not provided by the AuthenticationClient, it is only the product of extracting AuthorizationId from the request which).
-    /// Complete view:
-    /// A user inserts there credentials, gets a AuthorizationSessionId, this ID needs to be added to the user's client via a Cookie.
-    ///
-    /// ```ignore
-    ///     async fn login_handler(
-    ///                 State(authentication_client):State<AuthenticationClient>,
-    ///                 ExtractLoginForm((username,password,anti_csrf_token)):ExtractLoginForm
-    ///             ) -> impl IntoResponse {
-    ///         let authorization_session_id = authentication_client.authenticate(Attempt::new_browser_password(username,password,anti_csrf_token))
-    ///             .await?;
-    ///         // Sets the x-auth-session-id header.
-    ///         set_auth_session_cookie(authorization_session_id);
-    ///     }
-    /// ```
-    ///
-    /// On future requests the proxy will map the x-auth-session-id to an x-auth-id. There is a AuthorizationId that implementions FromRequestParts,
-    /// which can be used in handlers or in other request extractors.
-    async fn authenticate(
-        &self,
-        attempt: AuthenticationAttempt,
-    ) -> AuthClientResult<Result<AuthorizationSessionId, AuthenticationError>>;
-
-    /// If the verification is OK, then the system won't produce a value.
-    /// But now the authenticate method will sucessfully return given the data provided to the create_authentication method.
-    async fn verify(
-        &self,
-        attempt: VerificationAttempt,
-    ) -> AuthClientResult<Result<(), VerificationError>>;
-
-    /// If the creation suceeded then the system will return the contact input alongside a verification code.
-    /// Send the verification code to the user with a link back to your site to collect the verification code.
-    async fn create_unverified_authentication(
-        &self,
-        create_authentication: CreateUnverifiedAuthentication,
-    ) -> AuthClientResult<Result<AuthenticationCreated, CreateAuthenticationError>>;
-
-    /// The system takes a point of contact, and creates a recovery code.
-    /// It will return the contact input and the recovery code.
-    /// Send the recovery code to the contact with a link to an a
-    async fn create_recovery(
-        &self,
-        contact: Contact,
-    ) -> AuthClientResult<Result<Recovery, CreateRecoveryError>>;
-
-    /// Attempting recovery will produce an authorization id, the same as authenticating. Recovery is basically authentication by secondary means.
-    /// See authenticate method documentation for how to use AuthorizationSessionId
-    async fn recover(
-        &self,
-        attempt: AttemptRecovery,
-    ) -> AuthClientResult<Result<AuthorizationSessionId, RecoveryError>>;
-
-    /// Check to see if a contact exists in the system. Idempotent existence lookup that returns a boolean.
-    async fn contact_exists(&self, contact: Contact) -> AuthClientResult<bool>;
-}
 #[derive(Clone, Debug)]
 pub struct AuthClientUnixSocket;
 
 #[derive(ThisError, Debug)]
 pub enum AuthClientError {
+    #[error("{0}")]
+    Custom(String),
     #[error(transparent)]
     StdIo(#[from] std::io::Error),
     #[error(transparent)]
@@ -348,10 +276,12 @@ pub enum AuthClientError {
     Bincode(#[from] Box<bincode::ErrorKind>),
 }
 impl AuthClientUnixSocket {
+    /// This function will serialize an empty body for the request if bincode::serialize returns an error when trying to serialize the body.
+    #[tracing::instrument(skip_all, err)]
     pub async fn req<Resp: DeserializeOwned, Body: Serialize>(
         &self,
         path: &'static str,
-        body: Option<Body>,
+        body: Body,
     ) -> Result<Resp, AuthClientError> {
         // We establish a new connection for each request. We could hypothetically create a connection pool, but would the lookup into the pool
         // be faster than this? And by how much? And will this even be a bottleneck?
@@ -363,110 +293,70 @@ impl AuthClientUnixSocket {
 
         tokio::task::spawn(async move {
             if let Err(err) = conn.await {
-                tracing::error!("{err:?}");
+                println!("Connection failed: {:?}", err);
             }
         });
-        let body = {
-            if let Some(body) = body {
-                let body = bincode::serialize(&body)?;
-                axum::body::Body::from(body)
-            } else {
-                axum::body::Body::empty()
-            }
-        };
+        let body = bincode::serialize(&body).map(|body| axum::body::Body::from(body))?;
 
         let request = http::Request::builder()
             .method(http::Method::POST)
-            .uri(&format!("http://EMPTY.com/{path}"))
+            .uri(&format!("http://EMPTY.com{path}"))
             .body(body)?;
 
         let response = sender.send_request(request).await?;
-        let body = response.collect().await?.to_bytes();
-        let resp = bincode::deserialize::<Resp>(&*body)?;
-        Ok(resp)
+        if response.status().is_success() {
+            let body = response.collect().await?.to_bytes();
+            let resp = bincode::deserialize::<Resp>(&*body)?;
+            Ok(resp)
+        } else {
+            Err(AuthClientError::Custom(format!(
+                "Bad Status {}",
+                response.status()
+            )))
+        }
     }
 }
-
-#[axum::async_trait]
-impl AuthenticationClient for AuthClientUnixSocket {
-    async fn create_anti_csrf_token(
-        &self,
-        session_id: SessionId,
-    ) -> AuthClientResult<AntiCsrfToken> {
-        self.req("/create_anti_csrf_token", Some(session_id)).await
-    }
-    async fn check_anti_csrf_token(
-        &self,
-        token: AntiCsrfToken,
-        session_id: SessionId,
-    ) -> AuthClientResult<AntiCsrfToken> {
-        self.req("/check_anti_csrf_token", Some((token, session_id)))
-            .await
-    }
-    async fn authenticate(
-        &self,
-        attempt: AuthenticationAttempt,
-    ) -> AuthClientResult<Result<AuthorizationSessionId, AuthenticationError>> {
-        self.req("/authenticate", Some(attempt)).await
-    }
-
-    async fn verify(
-        &self,
-        attempt: VerificationAttempt,
-    ) -> AuthClientResult<Result<(), VerificationError>> {
-        self.req("/verify", Some(attempt)).await
-    }
-
-    async fn create_unverified_authentication(
-        &self,
-        create_authentication: CreateUnverifiedAuthentication,
-    ) -> AuthClientResult<Result<AuthenticationCreated, CreateAuthenticationError>> {
-        self.req(
-            "/create_unverified_authentication",
-            Some(create_authentication),
-        )
-        .await
-    }
-
-    async fn create_recovery(
-        &self,
-        contact: Contact,
-    ) -> AuthClientResult<Result<Recovery, CreateRecoveryError>> {
-        self.req("/create_recovery", Some(contact)).await
-    }
-
-    async fn recover(
-        &self,
-        attempt: AttemptRecovery,
-    ) -> AuthClientResult<Result<AuthorizationSessionId, RecoveryError>> {
-        self.req("/recover", Some(attempt)).await
-    }
-
-    async fn contact_exists(&self, contact: Contact) -> AuthClientResult<bool> {
-        self.req("/contact_exists", Some(contact)).await
-    }
-}
-
-pub static X_AUTH_ID_HEADER_NAME: &'static str = "x-auth-id";
 
 /// This type implements FromRequestParts, and it parses the id given by the system in the authorization header, most likely "x-auth-id".
 /// If you call this extractor and there's no value in the header or the header doesnt exist it will return a 401 UNAUTHORIZED status code.
 /// If should never return 500 INTERNAL_SERVER_ERROR, and if it does so that's a bug in this libraries code.
 ///
 /// This type derefs into Uuid.
-#[derive(Copy, Clone, Debug, Default)]
-pub struct AuthorizationId(pub Uuid);
+#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
+pub struct AuthorizationId(pub Option<Uuid>);
 impl AuthorizationId {
     /// Checks to see if the uuid is default before accepting.
-    pub fn new(id: Uuid) -> Option<Self> {
-        id.ne(&Uuid::default()).then(move || AuthorizationId(id))
+    pub fn new(id: Uuid) -> Self {
+        if id.ne(&Uuid::default()) {
+            AuthorizationId(Some(id))
+        } else {
+            AuthorizationId(None)
+        }
+    }
+    pub fn empty() -> Self {
+        Self(None)
     }
 }
 impl Deref for AuthorizationId {
-    type Target = Uuid;
+    type Target = Option<Uuid>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+impl FromRedisValue for AuthorizationId {
+    fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
+        redis::RedisResult::Ok(AuthorizationId::new(
+            Uuid::from_redis_value(v).ok().unwrap_or_default(),
+        ))
+    }
+}
+impl ToRedisArgs for AuthorizationId {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + redis::RedisWrite,
+    {
+        self.0.write_redis_args(out);
     }
 }
 
@@ -487,10 +377,33 @@ impl<S> FromRequestParts<S> for AuthorizationId {
                     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, ()))
             })
             .and_then(|id| Uuid::from_str(id).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, ())))
-            .and_then(|id| AuthorizationId::new(id).ok_or((StatusCode::INTERNAL_SERVER_ERROR, ())))
+            .and_then(|id| Ok(AuthorizationId::new(id)))
+    }
+}
+#[derive(sqlx::Type)]
+pub struct HashedPassword(String);
+impl Deref for HashedPassword {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl HashedPassword {
+    /// Hashes the password.
+    pub fn new(password: &str) -> Self {
+        Self(password_auth::generate_hash(password))
+    }
+    pub fn from_hashed_password(hashed: String) -> Self {
+        Self(hashed)
+    }
+    pub fn compare_unhashed(&self, unhashed: &String) -> bool {
+        let result = password_auth::verify_password(&self.0, unhashed);
+        result.is_ok()
     }
 }
 
+pub type SessionId = Uuid;
 /*
     Each user has a session and session id, the session id is sent to the server via cookie
     When a user is authorized a new session id is issued which maps to an authorization id, otherwise it's just a value that we use to generate the anti-csrf-token
@@ -500,3 +413,13 @@ impl<S> FromRequestParts<S> for AuthorizationId {
     so to get an x-auth-id header from a session-id, we need to get the session-id from the token and match that to the anti-csrf-token header
     if we only have 1 or the other then no good.
 */
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn test_bincode_empty() {
+        assert!(bincode::serialize(&()).is_ok());
+        assert!(bincode::deserialize::<()>(&[]).is_ok());
+    }
+}

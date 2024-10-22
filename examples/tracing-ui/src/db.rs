@@ -354,7 +354,6 @@ pub mod tests {
         let trace: TraceUndigested = serde_json::from_str(json).unwrap();
         let client = ClickhouseClient::new().await.unwrap();
         let trace = digest_trace(trace);
-        println!("{trace:#?}");
         client.insert_trace(trace).await.unwrap();
     }
 }

@@ -76,7 +76,7 @@ pub mod server {
             // Spawn a new asynchronous task to handle the connection
             tokio::spawn(async move {
                 if let Err(e) = handle_server_traces(stream, client).await {
-                    eprintln!("Error: {:?}", e);
+                    tracing::error!("Error: {:?}", e);
                 }
             });
         }
@@ -97,7 +97,7 @@ pub mod server {
                     client.insert_trace(trace).await.unwrap();
                 }
                 Err(err) => {
-                    println!("{err:#?}")
+                    tracing::error!("{err:#?}")
                 }
             }
             buffer.clear(); // Clear buffer for next message
