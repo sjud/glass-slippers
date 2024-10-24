@@ -1,15 +1,8 @@
-/*
-    For the email client, we want to provide a way to automate the sending of emails to our stalwart instance.
-    Ultimately it'd be nice to have a UI and fancy ai automated marketing blah blah blah
-    but we should focus on completing our current flows for authentication,
-    verification, recovery
-
-*/
-
 use std::error::Error;
 
 use async_trait::async_trait;
 use jmap_client::client::Client as JmapClient;
+use jmap_client::mailbox::Property as MailboxProperty;
 use tera::Tera;
 lazy_static::lazy_static! {
     pub static ref TEMPLATES: Tera = {
@@ -44,14 +37,20 @@ pub trait EmailClient {
 #[async_trait]
 impl EmailClient for JmapClient {
     async fn create_verification_mailbox(&self) -> Result<(), Box<dyn Error>> {
-        self.mailbox_create(
-            "Verification",
-            None::<String>,
-            jmap_client::mailbox::Role::None,
-        )
-        .await
-        .unwrap()
-        .take_id();
+        if self
+            .mailbox_get("Verification", Some(vec![MailboxProperty::Id]))
+            .await?
+            .is_none()
+        {
+            self.mailbox_create(
+                "Verification",
+                None::<String>,
+                jmap_client::mailbox::Role::None,
+            )
+            .await?
+            .take_id();
+        }
+
         Ok(())
     }
 
@@ -62,8 +61,11 @@ impl EmailClient for JmapClient {
     ) -> Result<(), Box<dyn Error>> {
         let mut context = tera::Context::new();
         context.insert("code", &code);
-        let template = TEMPLATES.render("verification", &context)?;
-        let mut request = &self.build();
+        let html_body = TEMPLATES.render("verification", &context)?;
+        // create the email object
+
+        // create the email submission
+        // return submission id for polling?
         Ok(())
     }
     async fn send_recovery_email(&self) {}

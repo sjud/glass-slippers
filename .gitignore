@@ -6,3 +6,5 @@ Config.toml
 /zips
 /app_blue/*
 /app_green/*
+stalwart_mail_config/*
+/email_templates/*

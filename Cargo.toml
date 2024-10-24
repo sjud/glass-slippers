@@ -1,2 +1,9 @@
 [workspace]
-members = ["crates/proxy", "crates/auth", "crates/runner", "crates/email"]
+resolver = "2"
+members = [
+    "crates/proxy",
+    "crates/auth",
+    "crates/runner",
+    "crates/email",
+    "examples/*",
+]
